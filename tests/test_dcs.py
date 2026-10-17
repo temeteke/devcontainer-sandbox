@@ -108,6 +108,7 @@ class TestDcs(unittest.TestCase):
             "cpp": (IMAGE_PREFIX + "cpp:latest", set(), "bash"),
             "playwright": (BASE_IMAGE, {FEATURE_PREFIX + "playwright:0"}, "bash"),
             "opencode": (BASE_IMAGE, {FEATURE_PREFIX + "opencode:0"}, "opencode"),
+            "dsh": (BASE_IMAGE, {FEATURE_PREFIX + "dsh:0"}, "dsh"),
             "codex": (BASE_IMAGE, {FEATURE_PREFIX + "codex:0"}, "codex"),
             "claude": (BASE_IMAGE, {FEATURE_PREFIX + "claude-code:0"}, "claude"),
             "tmux": (BASE_IMAGE, {FEATURE_PREFIX + "tmux:0"}, "tmux"),
@@ -152,6 +153,15 @@ class TestDcs(unittest.TestCase):
         self.assertEqual(set(config["features"]), {FEATURE_PREFIX + "opencode:0"})
         _, _, exec_ = self.up_and_exec()
         self.assertEqual(exec_[exec_.index("--") + 1], "opencode")
+
+    def test_dsh_headless_arguments(self):
+        result = self.run_dcs("dsh", "--profile", "headless", "Summarize this repository")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        config = json.loads(self.config.read_text())
+        self.assertEqual(config["features"], {FEATURE_PREFIX + "dsh:0": {}})
+        _, _, exec_ = self.up_and_exec()
+        self.assertEqual(exec_[exec_.index("--") + 1:],
+                         ["dsh", "--profile", "headless", "Summarize this repository"])
 
     def test_first_image_and_command_win(self):
         cases = {
@@ -376,7 +386,7 @@ class TestDcs(unittest.TestCase):
         help_ = self.run_dcs("--help")
         self.assertEqual(help_.returncode, 0)
         for component in ("python", "python:3.12", "node", "node:22",
-                          "go:1.26", "rust:1.87", "opencode", "codex",
+                          "go:1.26", "rust:1.87", "opencode", "dsh", "codex",
                           "claude", "tmux", "vim", "base"):
             self.assertIn(component, help_.stdout)
         r = self.run_dcs("--bad")

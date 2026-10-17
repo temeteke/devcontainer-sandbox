@@ -60,6 +60,7 @@ The first argument names zero or more components, separated by commas. A compone
 | `php:8.5` / `php:8.4` / `php:8.3` | `mcr.microsoft.com/devcontainers/php:<version>` | `ghcr.io/devcontainers/features/php:1` (`version`) | — |
 | `cpp` | `mcr.microsoft.com/devcontainers/cpp:latest` | — | — |
 | `opencode` | — | `ghcr.io/temeteke/devcontainer-features/opencode:0` | `opencode` |
+| `dsh` | — | `ghcr.io/temeteke/devcontainer-features/dsh:0` | `dsh` |
 | `codex` | — | `ghcr.io/temeteke/devcontainer-features/codex:0` | `codex` |
 | `claude` | — | `ghcr.io/temeteke/devcontainer-features/claude-code:0` | `claude` |
 | `tmux` | — | `ghcr.io/temeteke/devcontainer-features/tmux:0` | `tmux` |
@@ -88,6 +89,7 @@ That installs the opencode component and runs it. Combine components by separati
 ```sh
 dcs opencode,tmux,vim     # opencode, with tmux and Vim installed
 dcs opencode,python       # opencode on the Python image
+dcs dsh --help           # DeepSeek Harness CLI help
 dcs tmux,opencode         # tmux, with opencode available inside it
 ```
 
@@ -111,6 +113,10 @@ dcs opencode bash                 # a shell instead of opencode
 dcs opencode --help               # run opencode --help
 dcs opencode opencode --help      # the same, by naming the command explicitly
 ```
+
+DeepSeek Harness is a profile-based launcher rather than a built-in terminal chat.
+For example, `dcs dsh --profile headless "Summarize this repository"` runs a
+headless profile. Web UI requires port forwarding configured separately.
 
 `--` ends the wrapper's option parsing, and the arguments after it are the command and its arguments. It lets a command name that begins with a dash be passed.
 
