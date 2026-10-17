@@ -2,10 +2,10 @@
 
 BINDIR ?= $(HOME)/.local/bin
 
-.PHONY: help install install-dcs install-devcontainer uninstall test
+.PHONY: help install install-dcs install-devcontainer uninstall uninstall-devcontainer test
 
 help:
-	@printf 'Targets:\n  make install    Install dcs and, if missing, Dev Container CLI via npm\n  make uninstall  Remove dcs only (leave Dev Container CLI installed)\n  make test       Run offline tests\n'
+	@printf 'Targets:\n  make install    Install dcs and, if missing, Dev Container CLI via npm\n  make uninstall              Remove dcs only (leave Dev Container CLI installed)\n  make uninstall-devcontainer  Remove npm-managed Dev Container CLI only\n  make test                   Run offline tests\n'
 
 install: install-devcontainer install-dcs
 
@@ -32,6 +32,13 @@ install-dcs:
 uninstall:
 	@rm -f -- "$(BINDIR)/dcs"
 	@printf 'Removed dcs from %s (Dev Container CLI was not changed)\n' "$(BINDIR)"
+
+uninstall-devcontainer:
+	@if ! command -v npm >/dev/null 2>&1; then \
+		printf 'npm is required to uninstall @devcontainers/cli\n' >&2; \
+		exit 1; \
+	fi
+	@npm uninstall --global @devcontainers/cli
 
 test:
 	bash -n bin/dcs
