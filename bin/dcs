@@ -3,13 +3,16 @@ set -euo pipefail
 
 readonly IMAGE_PREFIX='mcr.microsoft.com/devcontainers/'
 readonly FEATURE_PREFIX='ghcr.io/temeteke/devcontainer-features'
+readonly DEVCONTAINER_FEATURES='ghcr.io/devcontainers/features'
 readonly DEFAULT_IMAGE="${IMAGE_PREFIX}base:ubuntu24.04"
 
 # Components. The first positional argument is a comma-separated list of
 # component names. A component may carry a base image, Dev Container Features
 # (space separated), and the command to run when it is the first component that
-# has one. Add a component with one add_component line. The `base` component is
-# always appended as the fallback, so `dcs` alone starts a bash shell. The tmux
+# has one. Add a component with one add_component line. A component contributes
+# its image when no image is set yet; otherwise its Features are added, so a
+# language component can be layered onto another language's image. `base` is
+# appended last unless it is named, so `dcs` alone starts a bash shell. The tmux
 # and Vim Features bind-mount host files (see README).
 COMPONENT_NAMES=()
 declare -A COMPONENT_IMAGE=()
@@ -22,30 +25,41 @@ add_component() {
   COMPONENT_COMMAND[$1]="$4"
 }
 
-add_component python   "${IMAGE_PREFIX}python:latest"          ''                        python
-add_component node     "${IMAGE_PREFIX}javascript-node:latest" ''                        node
-add_component go       "${IMAGE_PREFIX}go:latest"              ''                        bash
-add_component rust     "${IMAGE_PREFIX}rust:latest"            ''                        bash
+add_component python   "${IMAGE_PREFIX}python:latest"          "${DEVCONTAINER_FEATURES}/python:1" python
+add_component node     "${IMAGE_PREFIX}javascript-node:latest" "${DEVCONTAINER_FEATURES}/node:1"   node
+add_component go       "${IMAGE_PREFIX}go:latest"              "${DEVCONTAINER_FEATURES}/go:1"     bash
+add_component rust     "${IMAGE_PREFIX}rust:latest"            "${DEVCONTAINER_FEATURES}/rust:1"   bash
 add_component opencode '' "$FEATURE_PREFIX/opencode:0"         opencode
 add_component codex    '' "$FEATURE_PREFIX/codex:0"            codex
 add_component claude   '' "$FEATURE_PREFIX/claude-code:0"      claude
 add_component tmux     '' "$FEATURE_PREFIX/tmux:0"             tmux
 add_component vim      '' "$FEATURE_PREFIX/vim:0"              vim
-add_component base     "$DEFAULT_IMAGE" ''                     bash
+add_component base     "$DEFAULT_IMAGE" ''                     ''
+
+# Strip the known registry prefixes so the help reads as python:latest,
+# python:1 and so on.
+short_ref() {
+  case "$1" in
+    "$IMAGE_PREFIX"*) printf '%s' "${1#"$IMAGE_PREFIX"}" ;;
+    "$DEVCONTAINER_FEATURES"/*) printf '%s' "${1#"$DEVCONTAINER_FEATURES"/}" ;;
+    "$FEATURE_PREFIX"/*) printf '%s' "${1#"$FEATURE_PREFIX"/}" ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
 
 component_list() {
   local name detail feature
   for name in "${COMPONENT_NAMES[@]}"; do
     detail=''
     if [[ -n "${COMPONENT_IMAGE[$name]}" ]]; then
-      detail="image ${COMPONENT_IMAGE[$name]#"$IMAGE_PREFIX"}"
+      detail="image $(short_ref "${COMPONENT_IMAGE[$name]}")"
     fi
     # Unquoted on purpose: split the space-separated Feature list (no globs).
     for feature in ${COMPONENT_FEATURES[$name]}; do
-      detail+="${detail:+, }feature ${feature#"$FEATURE_PREFIX"/}"
+      detail+="${detail:+ / }feature $(short_ref "$feature")"
     done
     [[ -n "$detail" ]] || detail='(nothing)'
-    printf '  %-9s %-30s %s\n' "$name" "$detail" "${COMPONENT_COMMAND[$name]}"
+    printf '  %-9s %-46s %s\n' "$name" "$detail" "${COMPONENT_COMMAND[$name]:--}"
   done
 }
 
@@ -55,7 +69,7 @@ Usage: dcs [OPTIONS] [COMPONENT[,COMPONENT...]] [COMMAND [ARG ...]]
 
 Run a command in a new, disposable Dev Container.
 
-  --image IMAGE       Base image, overriding any image a component carries
+  --image IMAGE       Base image (counts as an image set before the components)
   --feature REF       Add a Dev Container Feature by full reference (repeatable)
   -h, --help          Show this help
   --                  End of options; treat the rest as COMMAND and its arguments
@@ -65,11 +79,13 @@ Options come before the component list.
 Components (name, what it adds, default command):
 $(component_list)
 
-Name zero or more components, separated by commas. Their Features are combined
-without duplicates. The first component that carries an image sets the base
-image, and the first that carries a command is run. A component name that
-contains '/' or ':' is used as a base image reference. The base component is
-always appended as the fallback, so 'dcs' alone starts a bash shell.
+Name zero or more components, separated by commas. They are processed in order:
+a component that carries an image sets it when no image is set yet, and its
+Features are added otherwise. So 'dcs python,node' uses the Python image and
+adds the Node Feature, and both languages are available. A component name that
+contains '/' or ':' is used as a base image reference. The first component that
+carries a command is run, and bash runs when none does. base is appended as the
+fallback when it is not named, so 'dcs' alone starts a bash shell.
 
 Everything after the component list is the container command. A command name
 runs instead of the default command (for example, 'dcs opencode bash'). Options
@@ -126,14 +142,16 @@ if [[ -n "$components_arg" ]]; then
 fi
 
 # Validate every token. A token that is not a component but contains '/' or ':'
-# is taken as a base image reference. base is pulled out so it can be appended
-# last, which makes it a fallback for both the image and the command.
+# is taken as a base image reference. base stays where it is when named, and is
+# appended otherwise so it is always available as a fallback.
 selected=()
+base_present=0
 if ((${#component_names[@]})); then
   for name in "${component_names[@]}"; do
     [[ -n "$name" ]] || { usage >&2; die "empty component name in: $components_arg"; }
     if [[ -n "${COMPONENT_FEATURES[$name]+x}" ]]; then
-      [[ "$name" == base ]] || selected+=("$name")
+      [[ "$name" == base ]] && base_present=1
+      selected+=("$name")
     elif [[ "$name" == */* || "$name" == *:* ]]; then
       selected+=("$name")
     else
@@ -142,30 +160,53 @@ if ((${#component_names[@]})); then
     fi
   done
 fi
-selected+=(base)
+((base_present)) || selected+=(base)
 component_names=("${selected[@]}")
 
-# Resolve the image and default command with "first one wins" ordering.
-resolved_image=''
+# Resolve the image, the default command and the Feature set in one ordered
+# pass. A component contributes its image when none is set yet; otherwise its
+# Features are added (so a language can be layered onto another language's
+# image). --image counts as an already-set image. Inline image references and
+# the first command behave the same way as before.
+resolved_image="$image_option"
 default_command=''
+declare -A seen_components=()
+declare -A seen_features=()
+all_features=()
 for name in "${component_names[@]}"; do
-  if [[ -n "${COMPONENT_FEATURES[$name]+x}" ]]; then
-    if [[ -z "$resolved_image" && -n "${COMPONENT_IMAGE[$name]}" ]]; then
-      resolved_image="${COMPONENT_IMAGE[$name]}"
-    fi
-    if [[ -z "$default_command" && -n "${COMPONENT_COMMAND[$name]}" ]]; then
-      default_command="${COMPONENT_COMMAND[$name]}"
-    fi
-  elif [[ -z "$resolved_image" ]]; then
-    resolved_image="$name"
+  if [[ -z "${COMPONENT_FEATURES[$name]+x}" ]]; then
+    # Not a component: an inline base image reference.
+    [[ -n "$resolved_image" ]] || resolved_image="$name"
+    continue
+  fi
+  [[ -z "${seen_components[$name]:-}" ]] || continue
+  seen_components[$name]=1
+  if [[ -n "${COMPONENT_IMAGE[$name]}" && -z "$resolved_image" ]]; then
+    # This component provides the image, so its Feature is already included.
+    resolved_image="${COMPONENT_IMAGE[$name]}"
+  else
+    # Unquoted on purpose: split the space-separated Feature list (no globs).
+    for feature in ${COMPONENT_FEATURES[$name]}; do
+      if [[ -z "${seen_features[$feature]+x}" ]]; then
+        seen_features[$feature]=1
+        all_features+=("$feature")
+      fi
+    done
+  fi
+  if [[ -z "$default_command" && -n "${COMPONENT_COMMAND[$name]}" ]]; then
+    default_command="${COMPONENT_COMMAND[$name]}"
   fi
 done
-
-if [[ -n "$image_option" ]]; then
-  image="$image_option"
-else
-  image="$resolved_image"
+if ((${#features[@]})); then
+  for feature in "${features[@]}"; do
+    if [[ -z "${seen_features[$feature]+x}" ]]; then
+      seen_features[$feature]=1
+      all_features+=("$feature")
+    fi
+  done
 fi
+
+image="$resolved_image"
 [[ -n "$image" ]] || image="$DEFAULT_IMAGE"
 
 if ((${#run_command[@]} == 0)); then
@@ -214,30 +255,6 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-
-# Combine every component's Features plus any --feature reference, without
-# duplicates (a repeated Feature would just be written twice otherwise).
-declare -A seen_features=()
-all_features=()
-for name in "${component_names[@]}"; do
-  if [[ -n "${COMPONENT_FEATURES[$name]+x}" && -n "${COMPONENT_FEATURES[$name]}" ]]; then
-    # Unquoted on purpose: split the space-separated Feature list (no globs).
-    for feature in ${COMPONENT_FEATURES[$name]}; do
-      if [[ -z "${seen_features[$feature]+x}" ]]; then
-        seen_features[$feature]=1
-        all_features+=("$feature")
-      fi
-    done
-  fi
-done
-if ((${#features[@]})); then
-  for feature in "${features[@]}"; do
-    if [[ -z "${seen_features[$feature]+x}" ]]; then
-      seen_features[$feature]=1
-      all_features+=("$feature")
-    fi
-  done
-fi
 
 # Emit a JSON string. Values are image and Feature references, so escaping \\
 # and " is enough; shell data is never interpolated unescaped.

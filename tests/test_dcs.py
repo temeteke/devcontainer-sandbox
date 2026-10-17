@@ -9,6 +9,7 @@ import unittest
 DCS = Path(__file__).resolve().parents[1] / "bin" / "dcs"
 IMAGE_PREFIX = "mcr.microsoft.com/devcontainers/"
 FEATURE_PREFIX = "ghcr.io/temeteke/devcontainer-features/"
+DEV_FEATURES = "ghcr.io/devcontainers/features/"
 BASE_IMAGE = IMAGE_PREFIX + "base:ubuntu24.04"
 
 FAKE_DEVCONTAINER = '''#!/usr/bin/env python3
@@ -150,11 +151,32 @@ class TestDcs(unittest.TestCase):
                 _, _, exec_ = self.up_and_exec()
                 self.assertEqual(exec_[exec_.index("--") + 1], command)
 
-    def test_base_is_always_last(self):
+    def test_language_feature_layering(self):
+        cases = {
+            "python,node": (IMAGE_PREFIX + "python:latest",
+                            {DEV_FEATURES + "node:1"}, "python"),
+            "node,python": (IMAGE_PREFIX + "javascript-node:latest",
+                            {DEV_FEATURES + "python:1"}, "node"),
+            "opencode,python": (IMAGE_PREFIX + "python:latest",
+                                {FEATURE_PREFIX + "opencode:0"}, "opencode"),
+        }
+        for components, (image, features, command) in cases.items():
+            with self.subTest(components=components):
+                self.log.write_text("")
+                result = self.run_dcs(components)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                config = json.loads(self.config.read_text())
+                self.assertEqual(config["image"], image)
+                self.assertEqual(set(config["features"]), features)
+                _, _, exec_ = self.up_and_exec()
+                self.assertEqual(exec_[exec_.index("--") + 1], command)
+
+    def test_base_is_processed_in_place(self):
         result = self.run_dcs("base,python")
         self.assertEqual(result.returncode, 0, result.stderr)
         config = json.loads(self.config.read_text())
-        self.assertEqual(config["image"], IMAGE_PREFIX + "python:latest")
+        self.assertEqual(config["image"], BASE_IMAGE)
+        self.assertEqual(set(config["features"]), {DEV_FEATURES + "python:1"})
         _, _, exec_ = self.up_and_exec()
         self.assertEqual(exec_[exec_.index("--") + 1], "python")
 
@@ -172,6 +194,8 @@ class TestDcs(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         config = json.loads(self.config.read_text())
         self.assertEqual(config["image"], "example.com/custom:1")
+        # With the image already set by --image, python is added as a Feature.
+        self.assertEqual(set(config["features"]), {DEV_FEATURES + "python:1"})
 
     def test_options_before_components(self):
         result = self.run_dcs("--image", "example.com/custom:1", "opencode")

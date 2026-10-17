@@ -39,22 +39,22 @@ make uninstall
 
 ## Components
 
-The first argument names zero or more components, separated by commas. A component is a named entry that may carry a base image, Dev Container Features, and the command to run. When several components are named, their Features are combined without duplicates, the first component that carries an image sets the base image, and the first that carries a command is run. The `base` component is always appended as the fallback, so `dcs` on its own starts a `bash` shell.
+The first argument names zero or more components, separated by commas. A component is a named entry that may carry a base image, Dev Container Features, and the command to run. Components are processed in order: a component that carries an image sets it when no image is set yet, and otherwise its Features are added. So the first language gives its image and later ones are layered on as Features. The first component that carries a command is run (and `bash` runs when none does). The `base` component stays where it is when named, and is appended otherwise, so `dcs` on its own starts a `bash` shell.
 
 | Component | Image | Features | Default command |
 | --- | --- | --- | --- |
-| `python` | `mcr.microsoft.com/devcontainers/python:latest` | — | `python` |
-| `node` | `mcr.microsoft.com/devcontainers/javascript-node:latest` | — | `node` |
-| `go` | `mcr.microsoft.com/devcontainers/go:latest` | — | `bash` |
-| `rust` | `mcr.microsoft.com/devcontainers/rust:latest` | — | `bash` |
-| `opencode` | — | `opencode:0` | `opencode` |
-| `codex` | — | `codex:0` | `codex` |
-| `claude` | — | `claude-code:0` | `claude` |
-| `tmux` | — | `tmux:0` | `tmux` |
-| `vim` | — | `vim:0` | `vim` |
-| `base` | `mcr.microsoft.com/devcontainers/base:ubuntu24.04` | — | `bash` |
+| `python` | `mcr.microsoft.com/devcontainers/python:latest` | `ghcr.io/devcontainers/features/python:1` | `python` |
+| `node` | `mcr.microsoft.com/devcontainers/javascript-node:latest` | `ghcr.io/devcontainers/features/node:1` | `node` |
+| `go` | `mcr.microsoft.com/devcontainers/go:latest` | `ghcr.io/devcontainers/features/go:1` | `bash` |
+| `rust` | `mcr.microsoft.com/devcontainers/rust:latest` | `ghcr.io/devcontainers/features/rust:1` | `bash` |
+| `opencode` | — | `ghcr.io/temeteke/devcontainer-features/opencode:0` | `opencode` |
+| `codex` | — | `ghcr.io/temeteke/devcontainer-features/codex:0` | `codex` |
+| `claude` | — | `ghcr.io/temeteke/devcontainer-features/claude-code:0` | `claude` |
+| `tmux` | — | `ghcr.io/temeteke/devcontainer-features/tmux:0` | `tmux` |
+| `vim` | — | `ghcr.io/temeteke/devcontainer-features/vim:0` | `vim` |
+| `base` | `mcr.microsoft.com/devcontainers/base:ubuntu24.04` | — | — |
 
-Features come from `ghcr.io/temeteke/devcontainer-features/` (the table omits the prefix). The set is defined in `bin/dcs`; adding a component means adding one `add_component` line there. `dcs --help` prints the same list.
+A language component carries both an image and a Feature: the first language named uses its (prebuilt) image, and any further ones are installed as Features on top. Its Feature is therefore skipped when its image was the one chosen. Layering a language as a Feature means the container is built (installing the Feature) instead of only pulling a prebuilt image; Docker layer caching makes repeated runs fast. The set is defined in `bin/dcs`; adding a component means adding one `add_component` line there. `dcs --help` prints the same list.
 
 ## Usage
 
@@ -64,7 +64,7 @@ From the project directory you want to edit:
 dcs opencode
 ```
 
-That installs the opencode component and runs it. Combine components by separating them with commas; their Features are combined, and the first component that carries a command decides what runs:
+That installs the opencode component and runs it. Combine components by separating them with commas; the first component that carries a command decides what runs:
 
 ```sh
 dcs opencode,tmux,vim     # opencode, with tmux and Vim installed
@@ -72,13 +72,16 @@ dcs opencode,python       # opencode on the Python image
 dcs tmux,opencode         # tmux, with opencode available inside it
 ```
 
-Name a language component to choose the base image, or pass a full image reference directly as a component:
+Name several languages to get all of them. The first uses its image and the rest are added as Features:
 
 ```sh
-dcs python                # the Python REPL
-dcs python,opencode       # python comes first, so the Python REPL runs
-dcs python:3.12,opencode  # a specific Python tag, then opencode
+dcs python,node           # the Python image plus the Node Feature
+dcs python,node bash      # both languages, in a shell
+dcs base,python,node      # the plain base image, with languages as Features
+dcs python:3.12,opencode  # a full image reference for the base image
 ```
+
+The first named component that carries a command runs; for example `dcs python` opens the Python REPL and `dcs base,python` does too because `base` carries no command.
 
 Options come before the component list. Everything after it is the container command: a command name runs instead of the default command, while options are passed to the default command:
 
@@ -97,7 +100,7 @@ dcs --image mcr.microsoft.com/devcontainers/python:3.12-bookworm \
   --feature ghcr.io/devcontainers/features/go:1 codex
 ```
 
-`--image` overrides any image a component carries, and `--feature` takes a full Feature reference (short names are not expanded). The tmux, Vim and agent Features require a Debian/Ubuntu-compatible image with `apt-get`.
+`--image` sets the base image before the components are processed, so a language named after it is added as a Feature instead of replacing the image; `--feature` takes a full Feature reference (short names are not expanded). The tmux, Vim and agent Features require a Debian/Ubuntu-compatible image with `apt-get`.
 
 `--help` is dcs's own help only before the component list: `dcs --help` prints it, while `dcs opencode --help` runs `opencode --help` in the container.
 
@@ -106,12 +109,12 @@ Use `dcs --help` for the wrapper's options.
 ## Behavior
 
 - **Disposable:** Every call gets a unique `dcs.session` Docker label; the corresponding container is removed at process exit or on normal signals. Built Docker images/layers remain cached.
-- **Components:** The first positional argument names zero or more built-in components (see [Components](#components)). Their Features are combined without duplicates; the first component that carries an image sets the base image, and the first that carries a command is run. A component set that omits tmux and Vim needs no host terminal configuration.
-- **Command:** dcs options come before the component list, and everything after it is the container command. With no command, `dcs` runs the first component's command; `dcs` on its own appends the `base` component, so it starts a `bash` shell. A command name runs instead of the default command; options are passed to the default command, so `dcs opencode --help` runs `opencode --help`.
+- **Components:** The first positional argument names zero or more built-in components (see [Components](#components)). They are processed in order: a component that carries an image sets it when none is set yet, and its Features are added otherwise (without duplicates). The first component that carries a command is run. A component set that omits tmux and Vim needs no host terminal configuration.
+- **Command:** dcs options come before the component list, and everything after it is the container command. With no command, `dcs` runs the first component's command, or `bash` when no component carries one; `dcs` on its own appends the `base` component, so it starts a `bash` shell. A command name runs instead of the default command; options are passed to the default command, so `dcs opencode --help` runs `opencode --help`.
 - **Workspace:** The current directory is passed to Dev Container CLI as `--workspace-folder`. `dcs` does not override `--mount-workspace-git-root`, so the CLI's default behavior applies (mounting the Git repository root when detected).
 - **Configuration:** `dcs` generates an ephemeral `devcontainer.json` outside your repository. Existing `.devcontainer` files are ignored and never modified.
 - **Extra Features:** `--feature` may be repeated and takes a full Feature reference (short names are not expanded). Each Feature is configured with its default options, and is added on top of the components' Features.
-- **Image:** A component may carry a base image; the first one named wins, and `--image` overrides it. With no image, the `base` component provides `mcr.microsoft.com/devcontainers/base:ubuntu24.04`. The tmux, Vim and agent Features require a Debian/Ubuntu-compatible image with `apt-get`.
+- **Image:** The first component that carries an image sets the base image; later languages are added as Features instead. `--image` pre-sets the image. With no image at all, the `base` component provides `mcr.microsoft.com/devcontainers/base:ubuntu24.04`. The tmux, Vim and agent Features require a Debian/Ubuntu-compatible image with `apt-get`.
 - **Lifecycle:** `devcontainer up` builds/starts the container and applies Feature lifecycle hooks. `devcontainer exec` runs the selected command there, locating the container by the same `dcs.session` label. `docker rm -f` cleans up only the container labeled for this invocation.
 
 The wrapper deliberately does not implement persistent container management or `.devcontainer` generation. For persistent environments, use Dev Container CLI and Templates directly.
