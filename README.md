@@ -51,6 +51,8 @@ The first argument names zero or more components, separated by commas. A compone
 | `rust` | `mcr.microsoft.com/devcontainers/rust:latest` | `ghcr.io/devcontainers/features/rust:1` | `bash` |
 | `rust:1.87` / `rust:1.86` / `rust:1.85` | — | `ghcr.io/devcontainers/features/rust:1` (`version`) | `bash` |
 | `opencode` | — | `ghcr.io/temeteke/devcontainer-features/opencode:0` | `opencode` |
+| `pi` | — | `ghcr.io/temeteke/devcontainer-features/pi:0` | `pi` |
+| `dsh` | — | `ghcr.io/temeteke/devcontainer-features/dsh:0` | `dsh` |
 | `codex` | — | `ghcr.io/temeteke/devcontainer-features/codex:0` | `codex` |
 | `claude` | — | `ghcr.io/temeteke/devcontainer-features/claude-code:0` | `claude` |
 | `tmux` | — | `ghcr.io/temeteke/devcontainer-features/tmux:0` | `tmux` |
@@ -76,6 +78,9 @@ That installs the opencode component and runs it. Combine components by separati
 ```sh
 dcs opencode,tmux,vim     # opencode, with tmux and Vim installed
 dcs opencode,python       # opencode on the Python image
+dcs pi                    # Pi Coding Agent TUI
+dcs pi,python             # Pi with Python available
+dcs dsh --help            # DeepSeek Harness CLI help
 dcs tmux,opencode         # tmux, with opencode available inside it
 ```
 
@@ -99,6 +104,12 @@ dcs opencode bash                 # a shell instead of opencode
 dcs opencode --help               # run opencode --help
 dcs opencode opencode --help      # the same, by naming the command explicitly
 ```
+
+DeepSeek Harness provides profile-based launch modes rather than a built-in Pi-style
+terminal chat. For example, `dcs dsh --profile headless "Summarize this repository"`
+invokes its headless profile. DSH Web UI requires separately configured port
+publishing/forwarding, which `dcs` does not provide automatically. DSH is in
+developer preview and may introduce compatibility-breaking changes.
 
 `--` ends the wrapper's option parsing, and the arguments after it are the command and its arguments. It lets a command name that begins with a dash be passed.
 
@@ -130,7 +141,12 @@ The wrapper deliberately does not implement persistent container management or `
 
 ## Host configuration and safety
 
-Some Features bind-mount host files and directories. A bind-mount source must exist on the host before container creation; `dcs` does not check host paths, so a missing one surfaces as a container-creation error. The mounted paths **are writable from the container** and changes survive container deletion. See each Feature's documentation for the paths it uses.
+Some Features bind-mount host files and directories. For Pi and DSH, create their host state directories with
+`mkdir -p ~/.pi/agent ~/.dsh` before the first invocation. They contain
+potentially sensitive authentication/session data and remain writable by
+sandbox processes.
+
+A bind-mount source must exist on the host before container creation; `dcs` does not check host paths, so a missing one surfaces as a container-creation error. The mounted paths **are writable from the container** and changes survive container deletion. See each Feature's documentation for the paths it uses.
 
 The sandbox is intended to limit accidental access to files outside the workspace. It is **not a security boundary for untrusted or malicious code**, especially because credentials and state may be shared and the container retains network access. Do not bind-mount the Docker socket or host root into the container. `dcs` does not do so itself.
 

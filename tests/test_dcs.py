@@ -97,6 +97,8 @@ class TestDcs(unittest.TestCase):
             # is Feature-only and runs on the base image.
             "rust:1.87": (BASE_IMAGE, {DEV_FEATURES + "rust:1"}, "bash"),
             "opencode": (BASE_IMAGE, {FEATURE_PREFIX + "opencode:0"}, "opencode"),
+            "pi": (BASE_IMAGE, {FEATURE_PREFIX + "pi:0"}, "pi"),
+            "dsh": (BASE_IMAGE, {FEATURE_PREFIX + "dsh:0"}, "dsh"),
             "codex": (BASE_IMAGE, {FEATURE_PREFIX + "codex:0"}, "codex"),
             "claude": (BASE_IMAGE, {FEATURE_PREFIX + "claude-code:0"}, "claude"),
             "tmux": (BASE_IMAGE, {FEATURE_PREFIX + "tmux:0"}, "tmux"),
@@ -141,6 +143,29 @@ class TestDcs(unittest.TestCase):
         self.assertEqual(set(config["features"]), {FEATURE_PREFIX + "opencode:0"})
         _, _, exec_ = self.up_and_exec()
         self.assertEqual(exec_[exec_.index("--") + 1], "opencode")
+
+    def test_added_agent_component_combinations(self):
+        cases = {
+            "pi,python": ({FEATURE_PREFIX + "pi:0"}, IMAGE_PREFIX + "python:latest", "pi"),
+            "dsh,pi": ({FEATURE_PREFIX + "dsh:0", FEATURE_PREFIX + "pi:0"}, BASE_IMAGE, "dsh"),
+        }
+        for components, (features, image, command) in cases.items():
+            with self.subTest(components=components):
+                self.log.write_text("")
+                result = self.run_dcs(components)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                config = json.loads(self.config.read_text())
+                self.assertEqual(config["image"], image)
+                self.assertEqual(set(config["features"]), features)
+                _, _, exec_ = self.up_and_exec()
+                self.assertEqual(exec_[exec_.index("--") + 1], command)
+
+    def test_dsh_headless_flags_forwarded(self):
+        result = self.run_dcs("dsh", "--profile", "headless", "Summarize this repository")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        _, _, exec_ = self.up_and_exec()
+        self.assertEqual(exec_[exec_.index("--") + 1:],
+                         ["dsh", "--profile", "headless", "Summarize this repository"])
 
     def test_first_image_and_command_win(self):
         cases = {
@@ -356,7 +381,7 @@ class TestDcs(unittest.TestCase):
         self.assertEqual(help_.returncode, 0)
         for component in ("python", "python:3.12", "node", "node:22",
                           "go:1.26", "rust:1.87", "opencode", "codex",
-                          "claude", "tmux", "vim", "base"):
+                          "claude", "pi", "dsh", "tmux", "vim", "base"):
             self.assertIn(component, help_.stdout)
         r = self.run_dcs("--bad")
         self.assertNotEqual(r.returncode, 0)

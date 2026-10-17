@@ -50,6 +50,8 @@ add_component "rust:1.87"   ''                                      "${DEVCONTAI
 add_component "rust:1.86"   ''                                      "${DEVCONTAINER_FEATURES}/rust:1"   '{"version":"1.86"}' bash
 add_component "rust:1.85"   ''                                      "${DEVCONTAINER_FEATURES}/rust:1"   '{"version":"1.85"}' bash
 add_component opencode      ''                                      "$FEATURE_PREFIX/opencode:0"        ''                  opencode
+add_component pi            ''                                      "$FEATURE_PREFIX/pi:0"              ''                  pi
+add_component dsh           ''                                      "$FEATURE_PREFIX/dsh:0"             ''                  dsh
 add_component codex         ''                                      "$FEATURE_PREFIX/codex:0"           ''                  codex
 add_component claude        ''                                      "$FEATURE_PREFIX/claude-code:0"     ''                  claude
 add_component tmux          ''                                      "$FEATURE_PREFIX/tmux:0"            ''                  tmux
