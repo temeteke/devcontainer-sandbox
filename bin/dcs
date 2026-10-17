@@ -16,7 +16,8 @@ Run a coding agent in a new, disposable Dev Container.
   -h, --help         Show this help
 
 Each run adds the agent Feature plus tmux and Vim Features. The current
-working directory is the workspace; any existing .devcontainer is ignored.
+working directory is passed to Dev Container CLI as the workspace folder;
+Dev Container CLI chooses the mount root. Existing .devcontainer is ignored.
 Agent state and terminal settings are shared from the host by the Features.
 The container is deleted on exit; built images may remain cached.
 HELP
@@ -119,7 +120,6 @@ printf 'dcs: starting disposable %s container for %s\n' "$agent" "$workspace" >&
 if ! devcontainer up \
   --workspace-folder "$workspace" \
   --config "$tmp/devcontainer.json" \
-  --mount-workspace-git-root=false \
   --id-label "dcs.session=$session" \
   --no-lockfile | tee "$tmp/up.log"; then
   die 'devcontainer up failed'
@@ -152,6 +152,5 @@ devcontainer exec \
   --container-id "$container_id" \
   --workspace-folder "$workspace" \
   --config "$tmp/devcontainer.json" \
-  --mount-workspace-git-root=false \
   -- "$agent" "${agent_args[@]}" || status=$?
 exit "$status"

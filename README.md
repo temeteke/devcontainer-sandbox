@@ -52,7 +52,7 @@ Use `dcs --help` for the wrapper's options.
 ## Behavior
 
 - **Disposable:** Every call gets a unique `dcs.session` Docker label; the corresponding container is removed at process exit or on normal signals. Built Docker images/layers remain cached.
-- **Workspace:** The current directory, **not the Git root**, is mounted as the workspace. Starting from a Git subdirectory may therefore hide `.git` and break Git operations.
+- **Workspace:** The current directory is passed to Dev Container CLI as `--workspace-folder`. `dcs` does not override `--mount-workspace-git-root`, so the CLI's default behavior applies (mounting the Git repository root when detected).
 - **Configuration:** `dcs` generates an ephemeral `devcontainer.json` outside your repository. Existing `.devcontainer` files are ignored and never modified.
 - **Agents:** `opencode`, `codex`, and `claude` automatically enable the matching `ghcr.io/temeteke/devcontainer-features/{opencode,codex,claude-code}:0` Feature.
 - **Terminal tools:** `tmux:0` and `vim:0` Features are always added.
