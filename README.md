@@ -6,23 +6,36 @@ It creates an isolated container for each invocation, runs the agent, and remove
 ## Requirements
 
 - Linux or WSL2 with an accessible Docker Engine
-- Bash 4+, Python 3, and the [`devcontainer` CLI](https://github.com/devcontainers/cli)
+- Bash 4+, Python 3, `make`, and the [`devcontainer` CLI](https://github.com/devcontainers/cli) (installed by `make install` when missing)
+- `npm` for the first installation if `devcontainer` is not already on `PATH`
 - Published [temeteke/devcontainer-features](https://github.com/temeteke/devcontainer-features)
 - Host-side `~/.tmux.conf`, `~/.vimrc` and `~/.vim/` must exist (required by the shared terminal Features)
 
-Install Dev Container CLI, for example:
+## Installation
+
+From a checkout of this repository:
 
 ```sh
-npm install -g @devcontainers/cli
+make install
 ```
 
-To install `dcs` from a checkout:
+`make install` installs `dcs` into `~/.local/bin`. If `devcontainer` is already available on `PATH`, it is left unchanged. Otherwise the Makefile runs `npm install --global @devcontainers/cli`. npm uses its existing global prefix configuration; the Makefile does not override npm's install location. Ensure the npm global executable directory is on `PATH`.
+
+Ensure `~/.local/bin` is on your `PATH` (including for subsequent shell sessions):
 
 ```sh
-install -Dm755 bin/dcs "$HOME/.local/bin/dcs"
+export PATH="$HOME/.local/bin:$PATH"
 ```
 
-Ensure `~/.local/bin` is on your `PATH`.
+To change the installation directory **for `dcs` itself**, run `make BINDIR=/your/bin install`. This does not affect npm's install location. To install only the `dcs` script without installing or checking Dev Container CLI, run `make install-dcs`.
+
+### Uninstallation
+
+```sh
+make uninstall
+```
+
+`make uninstall` invokes `make uninstall-dcs`, which removes only the `dcs` executable from `BINDIR` (by default, `~/.local/bin/dcs`). You can also call `make uninstall-dcs` directly. **Neither target uninstalls `devcontainer`**, regardless of whether it was already present or installed by `make install`. The Dev Container CLI is shared tooling and may be used outside this project. If you also want to remove the npm-managed Dev Container CLI, run `make uninstall-devcontainer` explicitly. This executes `npm uninstall --global @devcontainers/cli`, respecting the current npm global configuration. It does **not** remove `dcs`, and it is **not** called by `make uninstall`. A Dev Container CLI installed through another package manager (such as AUR) must be removed using that manager. Use the same `BINDIR` value as during installation if you customized it.
 
 ## Usage
 
