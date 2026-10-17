@@ -44,10 +44,13 @@ The first argument names zero or more components, separated by commas. A compone
 | Component | Image | Feature (options) | Default command |
 | --- | --- | --- | --- |
 | `python` | `mcr.microsoft.com/devcontainers/python:latest` | `ghcr.io/devcontainers/features/python:1` | `python` |
-| `python:3.14` … `python:3.10` | `mcr.microsoft.com/devcontainers/python:3.14` … | `ghcr.io/devcontainers/features/python:1` (`version`) | `python` |
+| `python:3.14` … `python:3.10` | `mcr.microsoft.com/devcontainers/python:<version>` | `ghcr.io/devcontainers/features/python:1` (`version`) | `python` |
 | `node` | `mcr.microsoft.com/devcontainers/javascript-node:latest` | `ghcr.io/devcontainers/features/node:1` | `node` |
+| `node:24` / `node:22` / `node:20` | `mcr.microsoft.com/devcontainers/javascript-node:<version>` | `ghcr.io/devcontainers/features/node:1` (`version`) | `node` |
 | `go` | `mcr.microsoft.com/devcontainers/go:latest` | `ghcr.io/devcontainers/features/go:1` | `bash` |
+| `go:1.27` / `go:1.26` / `go:1.25` | `mcr.microsoft.com/devcontainers/go:<version>` | `ghcr.io/devcontainers/features/go:1` (`version`) | `bash` |
 | `rust` | `mcr.microsoft.com/devcontainers/rust:latest` | `ghcr.io/devcontainers/features/rust:1` | `bash` |
+| `rust:1.87` / `rust:1.86` / `rust:1.85` | — | `ghcr.io/devcontainers/features/rust:1` (`version`) | `bash` |
 | `opencode` | — | `ghcr.io/temeteke/devcontainer-features/opencode:0` | `opencode` |
 | `codex` | — | `ghcr.io/temeteke/devcontainer-features/codex:0` | `codex` |
 | `claude` | — | `ghcr.io/temeteke/devcontainer-features/claude-code:0` | `claude` |
@@ -57,7 +60,7 @@ The first argument names zero or more components, separated by commas. A compone
 
 A language component carries both an image and a Feature: the first language named uses its (prebuilt) image, and any further ones are installed as Features on top. Its Feature is therefore skipped when its image was the one chosen. Layering a language as a Feature means the container is built (installing the Feature) instead of only pulling a prebuilt image; Docker layer caching makes repeated runs fast.
 
-A versioned component such as `python:3.12` pins the language version: when it comes first the image tag does it, and when it is layered on as a Feature the Feature's `version` option does. Adding a component, a version or a Feature option means adding one `add_component` line in `bin/dcs`; `dcs --help` prints the same list.
+A versioned component such as `python:3.12`, `node:22` or `go:1.26` pins the language version: when it comes first the image tag does it, and when it is layered on as a Feature the Feature's `version` option does. Rust images only publish a major-tag image, so `rust:1.87` and friends are Feature-only and run on whatever image the other components chose. Adding a component, a version or a Feature option means adding one `add_component` line in `bin/dcs`; `dcs --help` prints the same list.
 
 ## Usage
 
@@ -83,6 +86,7 @@ dcs python,node bash      # both languages, in a shell
 dcs base,python,node      # the plain base image, with languages as Features
 dcs python:3.12           # the Python 3.12 image
 dcs node,python:3.12      # the Node image, with the Python 3.12 Feature
+dcs node:20               # the Node.js 20 image
 ```
 
 The first named component that carries a command runs; for example `dcs python` opens the Python REPL and `dcs base,python` does too because `base` carries no command.

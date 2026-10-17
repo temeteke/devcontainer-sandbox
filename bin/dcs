@@ -36,8 +36,19 @@ add_component "python:3.12" "${IMAGE_PREFIX}python:3.12"            "${DEVCONTAI
 add_component "python:3.11" "${IMAGE_PREFIX}python:3.11"            "${DEVCONTAINER_FEATURES}/python:1" '{"version":"3.11"}' python
 add_component "python:3.10" "${IMAGE_PREFIX}python:3.10"            "${DEVCONTAINER_FEATURES}/python:1" '{"version":"3.10"}' python
 add_component node          "${IMAGE_PREFIX}javascript-node:latest" "${DEVCONTAINER_FEATURES}/node:1"   ''                  node
+add_component "node:24"     "${IMAGE_PREFIX}javascript-node:24"     "${DEVCONTAINER_FEATURES}/node:1"   '{"version":"24"}'   node
+add_component "node:22"     "${IMAGE_PREFIX}javascript-node:22"     "${DEVCONTAINER_FEATURES}/node:1"   '{"version":"22"}'   node
+add_component "node:20"     "${IMAGE_PREFIX}javascript-node:20"     "${DEVCONTAINER_FEATURES}/node:1"   '{"version":"20"}'   node
 add_component go            "${IMAGE_PREFIX}go:latest"              "${DEVCONTAINER_FEATURES}/go:1"     ''                  bash
+add_component "go:1.27"     "${IMAGE_PREFIX}go:1.27"                "${DEVCONTAINER_FEATURES}/go:1"     '{"version":"1.27"}' bash
+add_component "go:1.26"     "${IMAGE_PREFIX}go:1.26"                "${DEVCONTAINER_FEATURES}/go:1"     '{"version":"1.26"}' bash
+add_component "go:1.25"     "${IMAGE_PREFIX}go:1.25"                "${DEVCONTAINER_FEATURES}/go:1"     '{"version":"1.25"}' bash
+# Rust images only publish a major tag, so versioned Rust components are
+# Feature-only: they run on whatever image the other components chose.
 add_component rust          "${IMAGE_PREFIX}rust:latest"            "${DEVCONTAINER_FEATURES}/rust:1"   ''                  bash
+add_component "rust:1.87"   ''                                      "${DEVCONTAINER_FEATURES}/rust:1"   '{"version":"1.87"}' bash
+add_component "rust:1.86"   ''                                      "${DEVCONTAINER_FEATURES}/rust:1"   '{"version":"1.86"}' bash
+add_component "rust:1.85"   ''                                      "${DEVCONTAINER_FEATURES}/rust:1"   '{"version":"1.85"}' bash
 add_component opencode      ''                                      "$FEATURE_PREFIX/opencode:0"        ''                  opencode
 add_component codex         ''                                      "$FEATURE_PREFIX/codex:0"           ''                  codex
 add_component claude        ''                                      "$FEATURE_PREFIX/claude-code:0"     ''                  claude
@@ -70,7 +81,7 @@ component_list() {
       detail+=" ${COMPONENT_FEATURE_OPTIONS[$name]}"
     fi
     [[ -n "$detail" ]] || detail='(nothing)'
-    printf '  %-12s %-56s %s\n' "$name" "$detail" "${COMPONENT_COMMAND[$name]:--}"
+    printf '  %-12s %-60s %s\n' "$name" "$detail" "${COMPONENT_COMMAND[$name]:--}"
   done
 }
 
@@ -94,10 +105,10 @@ Name zero or more components, separated by commas. They are processed in order:
 a component that carries an image sets it when no image is set yet, and its
 Feature is added otherwise. So 'dcs python,node' uses the Python image and adds
 the Node Feature, and both languages are available. A versioned component such
-as 'python:3.12' pins the version, using its image when it comes first and the
-Feature's version option otherwise. The first component that carries a command
-is run, and bash runs when none does. base is appended as the fallback when it
-is not named, so 'dcs' alone starts a bash shell.
+as 'python:3.12' or 'node:22' pins the version, using its image when it comes
+first and the Feature's version option otherwise. The first component that
+carries a command is run, and bash runs when none does. base is appended as the
+fallback when it is not named, so 'dcs' alone starts a bash shell.
 
 Everything after the component list is the container command. A command name
 runs instead of the default command (for example, 'dcs opencode bash'). Options

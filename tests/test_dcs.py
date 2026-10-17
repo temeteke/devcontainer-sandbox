@@ -89,8 +89,13 @@ class TestDcs(unittest.TestCase):
             "python": (IMAGE_PREFIX + "python:latest", set(), "python"),
             "python:3.12": (IMAGE_PREFIX + "python:3.12", set(), "python"),
             "node": (IMAGE_PREFIX + "javascript-node:latest", set(), "node"),
+            "node:22": (IMAGE_PREFIX + "javascript-node:22", set(), "node"),
             "go": (IMAGE_PREFIX + "go:latest", set(), "bash"),
+            "go:1.26": (IMAGE_PREFIX + "go:1.26", set(), "bash"),
             "rust": (IMAGE_PREFIX + "rust:latest", set(), "bash"),
+            # Rust images publish no minor tags, so a versioned Rust component
+            # is Feature-only and runs on the base image.
+            "rust:1.87": (BASE_IMAGE, {DEV_FEATURES + "rust:1"}, "bash"),
             "opencode": (BASE_IMAGE, {FEATURE_PREFIX + "opencode:0"}, "opencode"),
             "codex": (BASE_IMAGE, {FEATURE_PREFIX + "codex:0"}, "codex"),
             "claude": (BASE_IMAGE, {FEATURE_PREFIX + "claude-code:0"}, "claude"),
@@ -213,6 +218,31 @@ class TestDcs(unittest.TestCase):
         _, _, exec_ = self.up_and_exec()
         self.assertEqual(exec_[exec_.index("--") + 1], "python")
 
+    def test_versioned_node_go_rust(self):
+        cases = {
+            # An image tag exists, so the versioned component can be first.
+            "node:20": (IMAGE_PREFIX + "javascript-node:20", {}, "node"),
+            "go:1.25": (IMAGE_PREFIX + "go:1.25", {}, "bash"),
+            # Rust has no minor image tag: it is a Feature on the base image.
+            "rust:1.86": (BASE_IMAGE,
+                          {DEV_FEATURES + "rust:1": {"version": "1.86"}}, "bash"),
+            # Layered on another image, the version goes to the Feature.
+            "base,node:22": (BASE_IMAGE,
+                             {DEV_FEATURES + "node:1": {"version": "22"}}, "node"),
+            "go:1.26,opencode": (IMAGE_PREFIX + "go:1.26",
+                                 {FEATURE_PREFIX + "opencode:0": {}}, "bash"),
+        }
+        for components, (image, features, command) in cases.items():
+            with self.subTest(components=components):
+                self.log.write_text("")
+                result = self.run_dcs(components)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                config = json.loads(self.config.read_text())
+                self.assertEqual(config["image"], image)
+                self.assertEqual(config["features"], features)
+                _, _, exec_ = self.up_and_exec()
+                self.assertEqual(exec_[exec_.index("--") + 1], command)
+
     def test_image_option_overrides_component_image(self):
         result = self.run_dcs("--image", "example.com/custom:1", "python")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -322,8 +352,9 @@ class TestDcs(unittest.TestCase):
     def test_help_lists_components_and_rejects_invalid_option(self):
         help_ = self.run_dcs("--help")
         self.assertEqual(help_.returncode, 0)
-        for component in ("python", "python:3.12", "node", "go", "rust",
-                          "opencode", "codex", "claude", "tmux", "vim", "base"):
+        for component in ("python", "python:3.12", "node", "node:22",
+                          "go:1.26", "rust:1.87", "opencode", "codex",
+                          "claude", "tmux", "vim", "base"):
             self.assertIn(component, help_.stdout)
         r = self.run_dcs("--bad")
         self.assertNotEqual(r.returncode, 0)
