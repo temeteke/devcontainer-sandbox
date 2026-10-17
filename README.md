@@ -8,8 +8,7 @@ Each invocation names zero or more components. A component contributes a base im
 - Linux or WSL2 with an accessible Docker Engine
 - Bash 4+, `make`, and the [`devcontainer` CLI](https://github.com/devcontainers/cli) (installed by `make install` when missing)
 - `npm` for the first installation if `devcontainer` is not already on `PATH`
-- Published [temeteke/devcontainer-features](https://github.com/temeteke/devcontainer-features)
-- Host-side `~/.tmux.conf`, `~/.vimrc` and `~/.vim/` when you name the tmux or Vim component. `dcs` does not check them (see [Host configuration and safety](#host-configuration-and-safety)).
+- The published Features the components use: [temeteke/devcontainer-features](https://github.com/temeteke/devcontainer-features) and [devcontainers/features](https://github.com/devcontainers/features)
 
 ## Installation
 
@@ -56,6 +55,8 @@ The first argument names zero or more components, separated by commas. A compone
 | `claude` | — | `ghcr.io/temeteke/devcontainer-features/claude-code:0` | `claude` |
 | `tmux` | — | `ghcr.io/temeteke/devcontainer-features/tmux:0` | `tmux` |
 | `vim` | — | `ghcr.io/temeteke/devcontainer-features/vim:0` | `vim` |
+| `gitlab-cli` | — | `ghcr.io/temeteke/devcontainer-features/gitlab-cli:0` | — |
+| `github-cli` | — | `ghcr.io/devcontainers/features/github-cli:1` | — |
 | `base` | `mcr.microsoft.com/devcontainers/base:ubuntu24.04` | — | — |
 
 A language component carries both an image and a Feature: the first language named uses its (prebuilt) image, and any further ones are installed as Features on top. Its Feature is therefore skipped when its image was the one chosen. Layering a language as a Feature means the container is built (installing the Feature) instead of only pulling a prebuilt image; Docker layer caching makes repeated runs fast.
@@ -108,7 +109,7 @@ dcs --image mcr.microsoft.com/devcontainers/python:3.12-bookworm \
   --feature ghcr.io/devcontainers/features/go:1 codex
 ```
 
-`--image` sets the base image before the components are processed, so a language named after it is added as a Feature instead of replacing the image; `--feature` takes a full Feature reference (short names are not expanded). The tmux, Vim and agent Features require a Debian/Ubuntu-compatible image with `apt-get`.
+`--image` sets the base image before the components are processed, so a language named after it is added as a Feature instead of replacing the image; `--feature` takes a full Feature reference (short names are not expanded). The bundled Features require a Debian/Ubuntu-compatible image with `apt-get`.
 
 `--help` is dcs's own help only before the component list: `dcs --help` prints it, while `dcs opencode --help` runs `opencode --help` in the container.
 
@@ -117,23 +118,21 @@ Use `dcs --help` for the wrapper's options.
 ## Behavior
 
 - **Disposable:** Every call gets a unique `dcs.session` Docker label; the corresponding container is removed at process exit or on normal signals. Built Docker images/layers remain cached.
-- **Components:** The first positional argument names zero or more built-in components (see [Components](#components)). They are processed in order: a component that carries an image sets it when none is set yet, and its Feature is added otherwise (without duplicates). The first component that carries a command is run. A component set that omits tmux and Vim needs no host terminal configuration.
+- **Components:** The first positional argument names zero or more built-in components (see [Components](#components)). They are processed in order: a component that carries an image sets it when none is set yet, and its Feature is added otherwise (without duplicates). The first component that carries a command is run.
 - **Command:** dcs options come before the component list, and everything after it is the container command. With no command, `dcs` runs the first component's command, or `bash` when no component carries one; `dcs` on its own appends the `base` component, so it starts a `bash` shell. A command name runs instead of the default command; options are passed to the default command, so `dcs opencode --help` runs `opencode --help`.
 - **Workspace:** The current directory is passed to Dev Container CLI as `--workspace-folder`. `dcs` does not override `--mount-workspace-git-root`, so the CLI's default behavior applies (mounting the Git repository root when detected).
 - **Configuration:** `dcs` generates an ephemeral `devcontainer.json` outside your repository. Existing `.devcontainer` files are ignored and never modified.
 - **Extra Features:** `--feature` may be repeated and takes a full Feature reference (short names are not expanded). Each Feature is configured with its default options, and is added on top of the components' Features.
-- **Image:** The first component that carries an image sets the base image; later languages are added as Features instead. `--image` pre-sets the image. With no image at all, the `base` component provides `mcr.microsoft.com/devcontainers/base:ubuntu24.04`. The tmux, Vim and agent Features require a Debian/Ubuntu-compatible image with `apt-get`.
+- **Image:** The first component that carries an image sets the base image; later languages are added as Features instead. `--image` pre-sets the image. With no image at all, the `base` component provides `mcr.microsoft.com/devcontainers/base:ubuntu24.04`. The bundled Features require a Debian/Ubuntu-compatible image with `apt-get`.
 - **Lifecycle:** `devcontainer up` builds/starts the container and applies Feature lifecycle hooks. `devcontainer exec` runs the selected command there, locating the container by the same `dcs.session` label. `docker rm -f` cleans up only the container labeled for this invocation.
 
 The wrapper deliberately does not implement persistent container management or `.devcontainer` generation. For persistent environments, use Dev Container CLI and Templates directly.
 
 ## Host configuration and safety
 
-The tmux and Vim Features mount `~/.tmux.conf`, `~/.vimrc`, and `~/.vim/` from the host. The agent Features also bind-mount their standard authentication, configuration, and session directories (for example, `~/.codex` and `~/.local/share/opencode`). These paths **are writable from the container**; changes survive container deletion. Other Features may add their own mounts.
+Some Features bind-mount host files and directories. A bind-mount source must exist on the host before container creation; `dcs` does not check host paths, so a missing one surfaces as a container-creation error. The mounted paths **are writable from the container** and changes survive container deletion. See each Feature's documentation for the paths it uses.
 
-A file bind mount requires its host source to exist before container creation. `dcs` does not verify the host paths, so a missing file or directory surfaces as a container-creation error.
-
-The sandbox is intended to limit accidental access to files outside the workspace. It is **not a security boundary for untrusted or malicious code**, especially because agent credentials/state are shared and the container retains network access. Do not bind-mount the Docker socket or host root into the container. `dcs` does not do so itself.
+The sandbox is intended to limit accidental access to files outside the workspace. It is **not a security boundary for untrusted or malicious code**, especially because credentials and state may be shared and the container retains network access. Do not bind-mount the Docker socket or host root into the container. `dcs` does not do so itself.
 
 In rare cases, `SIGKILL`, host shutdown, or Docker failures can leave a container running. Check `docker ps -a --filter label=dcs.session` and remove only stale `dcs` containers after identifying them.
 

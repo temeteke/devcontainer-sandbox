@@ -54,6 +54,8 @@ add_component codex         ''                                      "$FEATURE_PR
 add_component claude        ''                                      "$FEATURE_PREFIX/claude-code:0"     ''                  claude
 add_component tmux          ''                                      "$FEATURE_PREFIX/tmux:0"            ''                  tmux
 add_component vim           ''                                      "$FEATURE_PREFIX/vim:0"             ''                  vim
+add_component gitlab-cli    ''                                      "$FEATURE_PREFIX/gitlab-cli:0"      ''                  ''
+add_component github-cli    ''                                      "${DEVCONTAINER_FEATURES}/github-cli:1" ''              ''
 add_component base          "$DEFAULT_IMAGE"                        ''                                  ''                  ''
 
 # Strip the known registry prefixes so the help reads as python:latest,

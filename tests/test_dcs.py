@@ -101,6 +101,8 @@ class TestDcs(unittest.TestCase):
             "claude": (BASE_IMAGE, {FEATURE_PREFIX + "claude-code:0"}, "claude"),
             "tmux": (BASE_IMAGE, {FEATURE_PREFIX + "tmux:0"}, "tmux"),
             "vim": (BASE_IMAGE, {FEATURE_PREFIX + "vim:0"}, "vim"),
+            "gitlab-cli": (BASE_IMAGE, {FEATURE_PREFIX + "gitlab-cli:0"}, "bash"),
+            "github-cli": (BASE_IMAGE, {DEV_FEATURES + "github-cli:1"}, "bash"),
         }
         for component, (image, features, command) in components.items():
             with self.subTest(component=component):
