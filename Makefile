@@ -1,7 +1,6 @@
 .DEFAULT_GOAL := help
 
-PREFIX ?= $(HOME)/.local
-BINDIR := $(PREFIX)/bin
+BINDIR ?= $(HOME)/.local/bin
 
 .PHONY: help install install-dcs install-devcontainer test
 
@@ -18,13 +17,13 @@ install-devcontainer:
 			printf 'npm is required to install @devcontainers/cli (on Arch Linux: sudo pacman -S npm)\n' >&2; \
 			exit 1; \
 		fi; \
-		printf 'Installing @devcontainers/cli into %s\n' "$(PREFIX)"; \
-		npm install --global --prefix "$(PREFIX)" @devcontainers/cli || exit $$?; \
-		if [ ! -x "$(BINDIR)/devcontainer" ]; then \
-			printf 'Expected devcontainer at %s; check npm installation\n' "$(BINDIR)/devcontainer" >&2; \
+		printf 'Installing @devcontainers/cli using npm global configuration\n'; \
+		npm install --global @devcontainers/cli || exit $$?; \
+		if ! command -v devcontainer >/dev/null 2>&1; then \
+			printf 'devcontainer was installed but is not on PATH; check the npm global bin directory (npm prefix --global)\n' >&2; \
 			exit 1; \
 		fi; \
-		printf 'Installed devcontainer: %s\n' "$(BINDIR)/devcontainer"; \
+		printf 'Installed devcontainer: %s\n' "$$(command -v devcontainer)"; \
 	fi
 
 install-dcs:

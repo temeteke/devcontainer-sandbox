@@ -19,7 +19,7 @@ From a checkout of this repository:
 make install
 ```
 
-`make install` installs `dcs` into `~/.local/bin`. If `devcontainer` is already available on `PATH`, it is left unchanged. Otherwise the Makefile uses `npm install --global --prefix "$HOME/.local" @devcontainers/cli` to install the official CLI in your user directory, without `sudo`.
+`make install` installs `dcs` into `~/.local/bin`. If `devcontainer` is already available on `PATH`, it is left unchanged. Otherwise the Makefile runs `npm install --global @devcontainers/cli`. npm uses its existing global prefix configuration; the Makefile does not override npm's install location. Ensure the npm global executable directory is on `PATH`.
 
 Ensure `~/.local/bin` is on your `PATH` (including for subsequent shell sessions):
 
@@ -29,7 +29,7 @@ export PATH="$HOME/.local/bin:$PATH"
 
 On Arch Linux, install npm first if needed (`sudo pacman -S --needed npm`). The official npm package may also require a C/C++ build toolchain (`base-devel`) to compile native dependencies.
 
-To change the install location, run `make PREFIX=/your/prefix install`. To install only the `dcs` script without installing or checking Dev Container CLI, run `make install-dcs`.
+To change the installation directory **for `dcs` itself**, run `make BINDIR=/your/bin install`. This does not affect npm's install location. To install only the `dcs` script without installing or checking Dev Container CLI, run `make install-dcs`.
 
 ## Usage
 
