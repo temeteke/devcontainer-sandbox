@@ -1,7 +1,7 @@
 # devcontainer-sandbox
 
 `dcs` (Dev Container Sandbox) runs commands in disposable [Dev Containers](https://containers.dev/).
-Each invocation selects a profile that installs a set of Dev Container Features (a coding agent, or nothing at all), creates an isolated container, runs the command you choose (an interactive bash shell by default), and removes that container when the command exits. Source files and selected agent/terminal settings are deliberately shared with the host.
+Each invocation names zero or more components. A component contributes a base image (a language image such as Python or Node, or the plain base image), a set of Dev Container Features (a coding agent, tmux, Vim, ...), and the command to run. `dcs` creates an isolated container, runs the first component that carries a command (or the command you choose instead), and removes that container when the command exits. Source files and selected agent/terminal settings are deliberately shared with the host.
 
 ## Requirements
 
@@ -9,7 +9,7 @@ Each invocation selects a profile that installs a set of Dev Container Features 
 - Bash 4+, `make`, and the [`devcontainer` CLI](https://github.com/devcontainers/cli) (installed by `make install` when missing)
 - `npm` for the first installation if `devcontainer` is not already on `PATH`
 - Published [temeteke/devcontainer-features](https://github.com/temeteke/devcontainer-features)
-- Host-side `~/.tmux.conf`, `~/.vimrc` and `~/.vim/` when the selected profile includes the tmux or Vim Feature. `dcs` does not check them (see [Host configuration and safety](#host-configuration-and-safety)).
+- Host-side `~/.tmux.conf`, `~/.vimrc` and `~/.vim/` when you name the tmux or Vim component. `dcs` does not check them (see [Host configuration and safety](#host-configuration-and-safety)).
 
 ## Installation
 
@@ -37,19 +37,24 @@ make uninstall
 
 `make uninstall` invokes `make uninstall-dcs`, which removes only the `dcs` executable from `BINDIR` (by default, `~/.local/bin/dcs`). You can also call `make uninstall-dcs` directly. **Neither target uninstalls `devcontainer`**, regardless of whether it was already present or installed by `make install`. The Dev Container CLI is shared tooling and may be used outside this project. If you also want to remove the npm-managed Dev Container CLI, run `make uninstall-devcontainer` explicitly. This executes `npm uninstall --global @devcontainers/cli`, respecting the current npm global configuration. It does **not** remove `dcs`, and it is **not** called by `make uninstall`. A Dev Container CLI installed through another package manager (such as AUR) must be removed using that manager. Use the same `BINDIR` value as during installation if you customized it.
 
-## Profiles
+## Components
 
-The first argument selects a built-in profile. A profile is just a list of Dev Container Features to install on top of the base image, so you can pick a coding agent, a plain terminal sandbox, or nothing at all.
+The first argument names zero or more components, separated by commas. A component is a named entry that may carry a base image, Dev Container Features, and the command to run. When several components are named, their Features are combined without duplicates, the first component that carries an image sets the base image, and the first that carries a command is run. The `base` component is always appended as the fallback, so `dcs` on its own starts a `bash` shell.
 
-| Profile | Features added on top of the base image |
-| --- | --- |
-| `minimal` | none |
-| `base` | `tmux:0`, `vim:0` |
-| `opencode` | `tmux:0`, `vim:0`, `opencode:0` |
-| `codex` | `tmux:0`, `vim:0`, `codex:0` |
-| `claude` | `tmux:0`, `vim:0`, `claude-code:0` |
+| Component | Image | Features | Default command |
+| --- | --- | --- | --- |
+| `python` | `mcr.microsoft.com/devcontainers/python:latest` | — | `python` |
+| `node` | `mcr.microsoft.com/devcontainers/javascript-node:latest` | — | `node` |
+| `go` | `mcr.microsoft.com/devcontainers/go:latest` | — | `bash` |
+| `rust` | `mcr.microsoft.com/devcontainers/rust:latest` | — | `bash` |
+| `opencode` | — | `opencode:0` | `opencode` |
+| `codex` | — | `codex:0` | `codex` |
+| `claude` | — | `claude-code:0` | `claude` |
+| `tmux` | — | `tmux:0` | `tmux` |
+| `vim` | — | `vim:0` | `vim` |
+| `base` | `mcr.microsoft.com/devcontainers/base:ubuntu24.04` | — | `bash` |
 
-All of these Features come from `ghcr.io/temeteke/devcontainer-features/`. The set is defined in `bin/dcs`; adding a profile means adding one `add_profile` line there. `dcs --help` prints the same list.
+Features come from `ghcr.io/temeteke/devcontainer-features/` (the table omits the prefix). The set is defined in `bin/dcs`; adding a component means adding one `add_component` line there. `dcs --help` prints the same list.
 
 ## Usage
 
@@ -59,41 +64,54 @@ From the project directory you want to edit:
 dcs opencode
 ```
 
-With no command, `dcs` starts an interactive bash shell in a fresh container that already has the profile's Features applied. Start an installed agent yourself from that shell:
+That installs the opencode component and runs it. Combine components by separating them with commas; their Features are combined, and the first component that carries a command decides what runs:
 
 ```sh
-opencode
+dcs opencode,tmux,vim     # opencode, with tmux and Vim installed
+dcs opencode,python       # opencode on the Python image
+dcs tmux,opencode         # tmux, with opencode available inside it
 ```
 
-Name a command after the profile to run it directly instead of the shell. The first argument that is not a wrapper option starts the command, and every following argument is passed through unchanged:
+Name a language component to choose the base image, or pass a full image reference directly as a component:
 
 ```sh
-dcs opencode tmux                 # start tmux
-dcs opencode opencode --help      # pass --help to opencode
-dcs base npm test                 # tmux/Vim only, run a command
-dcs minimal --image mcr.microsoft.com/devcontainers/python:3.12 python -V
+dcs python                # the Python REPL
+dcs python,opencode       # python comes first, so the Python REPL runs
+dcs python:3.12,opencode  # a specific Python tag, then opencode
 ```
 
-`--` ends the wrapper's option parsing, and the arguments after it are the command and its arguments. It behaves like the first non-option argument, with one difference: it also lets a command name that begins with a dash be passed.
-
-Use a different base image and add extra Features:
+Options come before the component list. Everything after it is the container command: a command name runs instead of the default command, while options are passed to the default command:
 
 ```sh
-dcs codex --image mcr.microsoft.com/devcontainers/python:3.12-bookworm \
-  --feature ghcr.io/devcontainers/features/go:1
+dcs opencode bash                 # a shell instead of opencode
+dcs opencode --help               # run opencode --help
+dcs opencode opencode --help      # the same, by naming the command explicitly
 ```
+
+`--` ends the wrapper's option parsing, and the arguments after it are the command and its arguments. It lets a command name that begins with a dash be passed.
+
+Use a different base image and add extra Features (remember that options come before the component list):
+
+```sh
+dcs --image mcr.microsoft.com/devcontainers/python:3.12-bookworm \
+  --feature ghcr.io/devcontainers/features/go:1 codex
+```
+
+`--image` overrides any image a component carries, and `--feature` takes a full Feature reference (short names are not expanded). The tmux, Vim and agent Features require a Debian/Ubuntu-compatible image with `apt-get`.
+
+`--help` is dcs's own help only before the component list: `dcs --help` prints it, while `dcs opencode --help` runs `opencode --help` in the container.
 
 Use `dcs --help` for the wrapper's options.
 
 ## Behavior
 
 - **Disposable:** Every call gets a unique `dcs.session` Docker label; the corresponding container is removed at process exit or on normal signals. Built Docker images/layers remain cached.
-- **Profiles:** The first argument selects a built-in profile, which lists the Dev Container Features to install (see [Profiles](#profiles)). A profile that omits the tmux and Vim Features needs no host terminal configuration.
-- **Command:** With no command, `dcs` runs `bash` interactively (the base image's user has bash). Name a command to run something else, such as an installed agent. The wrapper's own options must come before the command.
+- **Components:** The first positional argument names zero or more built-in components (see [Components](#components)). Their Features are combined without duplicates; the first component that carries an image sets the base image, and the first that carries a command is run. A component set that omits tmux and Vim needs no host terminal configuration.
+- **Command:** dcs options come before the component list, and everything after it is the container command. With no command, `dcs` runs the first component's command; `dcs` on its own appends the `base` component, so it starts a `bash` shell. A command name runs instead of the default command; options are passed to the default command, so `dcs opencode --help` runs `opencode --help`.
 - **Workspace:** The current directory is passed to Dev Container CLI as `--workspace-folder`. `dcs` does not override `--mount-workspace-git-root`, so the CLI's default behavior applies (mounting the Git repository root when detected).
 - **Configuration:** `dcs` generates an ephemeral `devcontainer.json` outside your repository. Existing `.devcontainer` files are ignored and never modified.
-- **Custom tools:** `--feature` may be repeated. Each Feature is configured with its default options, and is added on top of the profile's Features.
-- **Image:** Defaults to `mcr.microsoft.com/devcontainers/base:ubuntu24.04`. The tmux and Vim Features require a Debian/Ubuntu-compatible image with `apt-get`, so profiles that include them do too. `minimal` runs on any image.
+- **Extra Features:** `--feature` may be repeated and takes a full Feature reference (short names are not expanded). Each Feature is configured with its default options, and is added on top of the components' Features.
+- **Image:** A component may carry a base image; the first one named wins, and `--image` overrides it. With no image, the `base` component provides `mcr.microsoft.com/devcontainers/base:ubuntu24.04`. The tmux, Vim and agent Features require a Debian/Ubuntu-compatible image with `apt-get`.
 - **Lifecycle:** `devcontainer up` builds/starts the container and applies Feature lifecycle hooks. `devcontainer exec` runs the selected command there, locating the container by the same `dcs.session` label. `docker rm -f` cleans up only the container labeled for this invocation.
 
 The wrapper deliberately does not implement persistent container management or `.devcontainer` generation. For persistent environments, use Dev Container CLI and Templates directly.

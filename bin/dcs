@@ -1,84 +1,110 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+readonly IMAGE_PREFIX='mcr.microsoft.com/devcontainers/'
 readonly FEATURE_PREFIX='ghcr.io/temeteke/devcontainer-features'
-readonly DEFAULT_IMAGE='mcr.microsoft.com/devcontainers/base:ubuntu24.04'
+readonly DEFAULT_IMAGE="${IMAGE_PREFIX}base:ubuntu24.04"
 
-# Profiles. The first positional argument selects one, and each profile lists
-# every Dev Container Feature it installs (space separated). Add a profile with
-# one add_profile line; omit tmux/Vim for a bare sandbox. The tmux and Vim
-# Features bind-mount host files (see README).
-PROFILE_NAMES=()
-declare -A PROFILE_FEATURES=()
-add_profile() {
-  PROFILE_NAMES+=("$1")
-  PROFILE_FEATURES[$1]="$2"
+# Components. The first positional argument is a comma-separated list of
+# component names. A component may carry a base image, Dev Container Features
+# (space separated), and the command to run when it is the first component that
+# has one. Add a component with one add_component line. The `base` component is
+# always appended as the fallback, so `dcs` alone starts a bash shell. The tmux
+# and Vim Features bind-mount host files (see README).
+COMPONENT_NAMES=()
+declare -A COMPONENT_IMAGE=()
+declare -A COMPONENT_FEATURES=()
+declare -A COMPONENT_COMMAND=()
+add_component() {
+  COMPONENT_NAMES+=("$1")
+  COMPONENT_IMAGE[$1]="$2"
+  COMPONENT_FEATURES[$1]="$3"
+  COMPONENT_COMMAND[$1]="$4"
 }
 
-add_profile minimal  ''
-add_profile base     "$FEATURE_PREFIX/tmux:0 $FEATURE_PREFIX/vim:0"
-add_profile opencode "$FEATURE_PREFIX/tmux:0 $FEATURE_PREFIX/vim:0 $FEATURE_PREFIX/opencode:0"
-add_profile codex    "$FEATURE_PREFIX/tmux:0 $FEATURE_PREFIX/vim:0 $FEATURE_PREFIX/codex:0"
-add_profile claude   "$FEATURE_PREFIX/tmux:0 $FEATURE_PREFIX/vim:0 $FEATURE_PREFIX/claude-code:0"
+add_component python   "${IMAGE_PREFIX}python:latest"          ''                        python
+add_component node     "${IMAGE_PREFIX}javascript-node:latest" ''                        node
+add_component go       "${IMAGE_PREFIX}go:latest"              ''                        bash
+add_component rust     "${IMAGE_PREFIX}rust:latest"            ''                        bash
+add_component opencode '' "$FEATURE_PREFIX/opencode:0"         opencode
+add_component codex    '' "$FEATURE_PREFIX/codex:0"            codex
+add_component claude   '' "$FEATURE_PREFIX/claude-code:0"      claude
+add_component tmux     '' "$FEATURE_PREFIX/tmux:0"             tmux
+add_component vim      '' "$FEATURE_PREFIX/vim:0"              vim
+add_component base     "$DEFAULT_IMAGE" ''                     bash
 
-profile_list() {
-  local name feature shown
-  for name in "${PROFILE_NAMES[@]}"; do
-    shown=''
+component_list() {
+  local name detail feature
+  for name in "${COMPONENT_NAMES[@]}"; do
+    detail=''
+    if [[ -n "${COMPONENT_IMAGE[$name]}" ]]; then
+      detail="image ${COMPONENT_IMAGE[$name]#"$IMAGE_PREFIX"}"
+    fi
     # Unquoted on purpose: split the space-separated Feature list (no globs).
-    for feature in ${PROFILE_FEATURES[$name]}; do
-      shown+="${shown:+ }${feature#"$FEATURE_PREFIX"/}"
+    for feature in ${COMPONENT_FEATURES[$name]}; do
+      detail+="${detail:+, }feature ${feature#"$FEATURE_PREFIX"/}"
     done
-    printf '  %-9s %s\n' "$name" "${shown:-(none)}"
+    [[ -n "$detail" ]] || detail='(nothing)'
+    printf '  %-9s %-30s %s\n' "$name" "$detail" "${COMPONENT_COMMAND[$name]}"
   done
 }
 
 usage() {
   cat <<HELP
-Usage: dcs <PROFILE> [--image IMAGE] [--feature FEATURE ...] [--] [COMMAND [ARG ...]]
+Usage: dcs [OPTIONS] [COMPONENT[,COMPONENT...]] [COMMAND [ARG ...]]
 
 Run a command in a new, disposable Dev Container.
 
-  --image IMAGE       Base image (default: $DEFAULT_IMAGE)
-  --feature FEATURE   Add a Dev Container Feature (repeatable)
-  --                  End of options; treat the rest as COMMAND and its arguments
+  --image IMAGE       Base image, overriding any image a component carries
+  --feature REF       Add a Dev Container Feature by full reference (repeatable)
   -h, --help          Show this help
+  --                  End of options; treat the rest as COMMAND and its arguments
 
-Profiles (Features added on top of the base image):
-$(profile_list)
+Options come before the component list.
 
-With no COMMAND, an interactive bash shell is started. Otherwise COMMAND is run
-inside the container. The first argument that is not an option starts COMMAND,
-and every following argument is passed through as-is (use -- when COMMAND itself
-begins with a dash).
+Components (name, what it adds, default command):
+$(component_list)
 
-Each profile installs its own set of Features. The current working directory is
-passed to Dev Container CLI as the workspace folder; Dev Container CLI chooses
-the mount root. Existing .devcontainer is ignored. Agent state and terminal
-settings are shared from the host by those Features. The container is deleted on
-exit; built images may remain cached.
+Name zero or more components, separated by commas. Their Features are combined
+without duplicates. The first component that carries an image sets the base
+image, and the first that carries a command is run. A component name that
+contains '/' or ':' is used as a base image reference. The base component is
+always appended as the fallback, so 'dcs' alone starts a bash shell.
+
+Everything after the component list is the container command. A command name
+runs instead of the default command (for example, 'dcs opencode bash'). Options
+are passed to the default command instead (for example, 'dcs opencode --help'
+runs 'opencode --help'). The current working directory is passed to Dev
+Container CLI as the workspace folder; the container is deleted on exit while
+built images may remain cached.
 HELP
 }
 
 die() { printf 'dcs: %s\n' "$*" >&2; exit 1; }
 
-if [[ $# -eq 0 ]]; then usage >&2; exit 2; fi
-case "$1" in
-  -h|--help) usage; exit 0 ;;
-  *) profile="$1"; shift ;;
-esac
-[[ -n "${PROFILE_FEATURES[$profile]+x}" ]] || { usage >&2; die "unknown profile: $profile"; }
-
-image="$DEFAULT_IMAGE"
+components_arg=''
+image_option=''
 features=()
 run_command=()
+components_seen=0
+append_default=0
 while (($#)); do
+  # Options come before the component list. Everything after the component
+  # list belongs to the container command.
+  if ((components_seen == 1)); then
+    case "$1" in
+      --) shift ;;
+      -*) append_default=1 ;;
+    esac
+    run_command=("$@")
+    break
+  fi
   case "$1" in
     --image|--feature)
       opt="$1"
       (($# >= 2)) || die "missing value for $opt"
       [[ -n "$2" && "$2" != --* ]] || die "missing value for $opt"
-      if [[ "$opt" == --image ]]; then image="$2"; else features+=("$2"); fi
+      if [[ "$opt" == --image ]]; then image_option="$2"; else features+=("$2"); fi
       shift 2 ;;
     --)
       shift
@@ -87,13 +113,70 @@ while (($#)); do
     -h|--help) usage; exit 0 ;;
     -*) die "unknown option: $1" ;;
     *)
-      # The first non-option argument starts the in-container command.
-      run_command=("$@")
-      break ;;
+      # The first non-option argument is the component list.
+      components_arg="$1"
+      components_seen=1
+      shift ;;
   esac
 done
+
+component_names=()
+if [[ -n "$components_arg" ]]; then
+  IFS=',' read -r -a component_names <<< "$components_arg"
+fi
+
+# Validate every token. A token that is not a component but contains '/' or ':'
+# is taken as a base image reference. base is pulled out so it can be appended
+# last, which makes it a fallback for both the image and the command.
+selected=()
+if ((${#component_names[@]})); then
+  for name in "${component_names[@]}"; do
+    [[ -n "$name" ]] || { usage >&2; die "empty component name in: $components_arg"; }
+    if [[ -n "${COMPONENT_FEATURES[$name]+x}" ]]; then
+      [[ "$name" == base ]] || selected+=("$name")
+    elif [[ "$name" == */* || "$name" == *:* ]]; then
+      selected+=("$name")
+    else
+      usage >&2
+      die "unknown component: $name"
+    fi
+  done
+fi
+selected+=(base)
+component_names=("${selected[@]}")
+
+# Resolve the image and default command with "first one wins" ordering.
+resolved_image=''
+default_command=''
+for name in "${component_names[@]}"; do
+  if [[ -n "${COMPONENT_FEATURES[$name]+x}" ]]; then
+    if [[ -z "$resolved_image" && -n "${COMPONENT_IMAGE[$name]}" ]]; then
+      resolved_image="${COMPONENT_IMAGE[$name]}"
+    fi
+    if [[ -z "$default_command" && -n "${COMPONENT_COMMAND[$name]}" ]]; then
+      default_command="${COMPONENT_COMMAND[$name]}"
+    fi
+  elif [[ -z "$resolved_image" ]]; then
+    resolved_image="$name"
+  fi
+done
+
+if [[ -n "$image_option" ]]; then
+  image="$image_option"
+else
+  image="$resolved_image"
+fi
+[[ -n "$image" ]] || image="$DEFAULT_IMAGE"
+
 if ((${#run_command[@]} == 0)); then
-  run_command=(bash)
+  if [[ -n "$default_command" ]]; then
+    run_command=("$default_command")
+  else
+    run_command=(bash)
+  fi
+elif ((append_default)) && [[ -n "$default_command" ]]; then
+  # Options given after the component list are passed to the default command.
+  run_command=("$default_command" "${run_command[@]}")
 fi
 
 for cmd in docker devcontainer; do
@@ -111,6 +194,8 @@ readonly session
 cleanup() {
   local status=$?
   trap - EXIT INT TERM
+  # Keep the wrapped command's exit status even if cleanup itself fails.
+  set +e
   local ids
   if ! ids="$(docker ps -aq --filter "label=dcs.session=$session")"; then
     printf 'dcs: warning: unable to locate containers for cleanup (session %s)\n' "$session" >&2
@@ -130,9 +215,28 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-profile_features=()
-if [[ -n "${PROFILE_FEATURES[$profile]}" ]]; then
-  read -r -a profile_features <<< "${PROFILE_FEATURES[$profile]}"
+# Combine every component's Features plus any --feature reference, without
+# duplicates (a repeated Feature would just be written twice otherwise).
+declare -A seen_features=()
+all_features=()
+for name in "${component_names[@]}"; do
+  if [[ -n "${COMPONENT_FEATURES[$name]+x}" && -n "${COMPONENT_FEATURES[$name]}" ]]; then
+    # Unquoted on purpose: split the space-separated Feature list (no globs).
+    for feature in ${COMPONENT_FEATURES[$name]}; do
+      if [[ -z "${seen_features[$feature]+x}" ]]; then
+        seen_features[$feature]=1
+        all_features+=("$feature")
+      fi
+    done
+  fi
+done
+if ((${#features[@]})); then
+  for feature in "${features[@]}"; do
+    if [[ -z "${seen_features[$feature]+x}" ]]; then
+      seen_features[$feature]=1
+      all_features+=("$feature")
+    fi
+  done
 fi
 
 # Emit a JSON string. Values are image and Feature references, so escaping \\
@@ -144,18 +248,18 @@ json_string() {
   printf '"%s"' "$value"
 }
 
-# A Feature that is both in the profile and passed via --feature yields a
-# repeated key; JSON parsers keep the last, and every value is {}.
 {
   printf '{\n'
   printf '  "name": "dcs sandbox",\n'
   printf '  "image": %s,\n' "$(json_string "$image")"
   printf '  "features": {'
   separator=''
-  for feature in "${profile_features[@]}" "${features[@]}"; do
-    printf '%s%s: {}' "$separator" "$(json_string "$feature")"
-    separator=', '
-  done
+  if ((${#all_features[@]})); then
+    for feature in "${all_features[@]}"; do
+      printf '%s%s: {}' "$separator" "$(json_string "$feature")"
+      separator=', '
+    done
+  fi
   printf '}\n'
   printf '}\n'
 } > "$tmp/devcontainer.json"
