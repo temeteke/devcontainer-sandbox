@@ -14,7 +14,7 @@ install-devcontainer:
 		printf 'Using existing devcontainer: %s\n' "$$(command -v devcontainer)"; \
 	else \
 		if ! command -v npm >/dev/null 2>&1; then \
-			printf 'npm is required to install @devcontainers/cli (on Arch Linux: sudo pacman -S npm)\n' >&2; \
+			printf 'npm is required to install @devcontainers/cli\n' >&2; \
 			exit 1; \
 		fi; \
 		printf 'Installing @devcontainers/cli using npm global configuration\n'; \

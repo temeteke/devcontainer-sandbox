@@ -27,8 +27,6 @@ Ensure `~/.local/bin` is on your `PATH` (including for subsequent shell sessions
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-On Arch Linux, install npm first if needed (`sudo pacman -S --needed npm`). The official npm package may also require a C/C++ build toolchain (`base-devel`) to compile native dependencies.
-
 To change the installation directory **for `dcs` itself**, run `make BINDIR=/your/bin install`. This does not affect npm's install location. To install only the `dcs` script without installing or checking Dev Container CLI, run `make install-dcs`.
 
 ### Uninstallation
