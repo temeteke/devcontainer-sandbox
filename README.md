@@ -31,6 +31,14 @@ On Arch Linux, install npm first if needed (`sudo pacman -S --needed npm`). The 
 
 To change the installation directory **for `dcs` itself**, run `make BINDIR=/your/bin install`. This does not affect npm's install location. To install only the `dcs` script without installing or checking Dev Container CLI, run `make install-dcs`.
 
+### Uninstallation
+
+```sh
+make uninstall
+```
+
+This removes only the `dcs` executable from `BINDIR` (by default, `~/.local/bin/dcs`). **It does not uninstall `devcontainer`**, regardless of whether it was already present or installed by `make install`. The Dev Container CLI is shared tooling and may be used outside this project. If you deliberately want to remove an npm-installed CLI as well, use `npm uninstall --global @devcontainers/cli` separately; tools installed through another package manager must be removed with that manager. Use the same `BINDIR` value as during installation if you customized it.
+
 ## Usage
 
 From the project directory you want to edit:
