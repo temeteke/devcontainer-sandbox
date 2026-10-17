@@ -104,13 +104,15 @@ dcs node:20               # the Node.js 20 image
 
 The first named component that carries a command runs; for example `dcs python` opens the Python REPL and `dcs base,python` does too because `base` carries no command.
 
-Options come before the component list. Everything after it is the container command: a command name runs instead of the default command, while options are passed to the default command:
+Options come before the component list. Everything after it is the container command, replacing the component's default command:
 
 ```sh
 dcs opencode bash                 # a shell instead of opencode
-dcs opencode --help               # run opencode --help
-dcs opencode opencode --help      # the same, by naming the command explicitly
+dcs opencode opencode --help      # run opencode --help
+dcs python pip install requests   # run pip in the Python sandbox
 ```
+
+So an argument is only passed to the component's default command if you name that command yourself.
 
 `--` ends the wrapper's option parsing, and the arguments after it are the command and its arguments. It lets a command name that begins with a dash be passed.
 
@@ -123,7 +125,7 @@ dcs --image mcr.microsoft.com/devcontainers/python:3.12-bookworm \
 
 `--image` sets the base image before the components are processed, so a language named after it is added as a Feature instead of replacing the image; `--feature` takes a full Feature reference (short names are not expanded). The bundled Features require a Debian/Ubuntu-compatible image with `apt-get`.
 
-`--help` is dcs's own help only before the component list: `dcs --help` prints it, while `dcs opencode --help` runs `opencode --help` in the container.
+`--help` is dcs's own help only before the component list. `dcs --help` prints it, while anything after the component list is run in the container, so pass a component's options by naming its command: `dcs opencode opencode --help`.
 
 Use `dcs --help` for the wrapper's options.
 
@@ -131,7 +133,7 @@ Use `dcs --help` for the wrapper's options.
 
 - **Disposable:** Every call gets a unique `dcs.session` Docker label; the corresponding container is removed at process exit or on normal signals. Built Docker images/layers remain cached.
 - **Components:** The first positional argument names zero or more built-in components (see [Components](#components)). They are processed in order: a component that carries an image sets it when none is set yet, and its Feature is added otherwise (without duplicates). The first component that carries a command is run.
-- **Command:** dcs options come before the component list, and everything after it is the container command. With no command, `dcs` runs the first component's command, or `bash` when no component carries one; `dcs` on its own appends the `base` component, so it starts a `bash` shell. A command name runs instead of the default command; options are passed to the default command, so `dcs opencode --help` runs `opencode --help`.
+- **Command:** dcs options come before the component list, and everything after it is the container command, replacing the component's default command. With no command, `dcs` runs the first component's command, or `bash` when no component carries one; `dcs` on its own appends the `base` component, so it starts a `bash` shell. Pass a component's options by naming its command, as in `dcs opencode opencode --help`.
 - **Workspace:** The current directory is passed to Dev Container CLI as `--workspace-folder`. `dcs` does not override `--mount-workspace-git-root`, so the CLI's default behavior applies (mounting the Git repository root when detected).
 - **Configuration:** `dcs` generates an ephemeral `devcontainer.json` outside your repository. Existing `.devcontainer` files are ignored and never modified.
 - **Extra Features:** `--feature` may be repeated and takes a full Feature reference (short names are not expanded). Each Feature is configured with its default options, and is added on top of the components' Features.

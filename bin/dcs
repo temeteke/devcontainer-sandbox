@@ -131,12 +131,10 @@ first and the Feature's version option otherwise. The first component that
 carries a command is run, and bash runs when none does. base is appended as the
 fallback when it is not named, so 'dcs' alone starts a bash shell.
 
-Everything after the component list is the container command. A command name
-runs instead of the default command (for example, 'dcs opencode bash'). Options
-are passed to the default command instead (for example, 'dcs opencode --help'
-runs 'opencode --help'). The current working directory is passed to Dev
-Container CLI as the workspace folder; the container is deleted on exit while
-built images may remain cached.
+Everything after the component list is the container command, replacing the
+component's default command (for example, 'dcs opencode bash'). The current
+working directory is passed to Dev Container CLI as the workspace folder; the
+container is deleted on exit while built images may remain cached.
 HELP
 }
 
@@ -147,15 +145,13 @@ image_option=''
 features=()
 run_command=()
 components_seen=0
-append_default=0
 while (($#)); do
-  # Options come before the component list. Everything after the component
-  # list belongs to the container command.
+  # Options come before the component list. Everything after it is the
+  # container command, replacing the component's default command.
   if ((components_seen == 1)); then
-    case "$1" in
-      --) shift ;;
-      -*) append_default=1 ;;
-    esac
+    if [[ "$1" == -- ]]; then
+      shift
+    fi
     run_command=("$@")
     break
   fi
@@ -251,9 +247,6 @@ if ((${#run_command[@]} == 0)); then
   else
     run_command=(bash)
   fi
-elif ((append_default)) && [[ -n "$default_command" ]]; then
-  # Options given after the component list are passed to the default command.
-  run_command=("$default_command" "${run_command[@]}")
 fi
 
 for cmd in docker devcontainer; do

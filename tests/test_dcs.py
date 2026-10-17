@@ -365,12 +365,20 @@ class TestDcs(unittest.TestCase):
         calls = self.calls() if self.log.exists() else []
         self.assertFalse(any(c[:1] == ["devcontainer"] for c in calls))
 
-    def test_options_after_components_go_to_default_command(self):
+    def test_command_after_components_replaces_the_default(self):
+        # Naming the command runs it, with the following arguments untouched.
+        result = self.run_dcs("opencode", "opencode", "--help")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        _, _, exec_ = self.up_and_exec()
+        self.assertEqual(exec_[exec_.index("--") + 1:], ["opencode", "--help"])
+
+        # Everything after the component list is the command, even when it
+        # starts with a dash.
+        self.log.write_text("")
         result = self.run_dcs("opencode", "--help", "--version")
         self.assertEqual(result.returncode, 0, result.stderr)
         _, _, exec_ = self.up_and_exec()
-        self.assertEqual(exec_[exec_.index("--") + 1:],
-                         ["opencode", "--help", "--version"])
+        self.assertEqual(exec_[exec_.index("--") + 1:], ["--help", "--version"])
 
     def test_help_lists_components_and_rejects_invalid_option(self):
         help_ = self.run_dcs("--help")
