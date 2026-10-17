@@ -6,23 +6,30 @@ It creates an isolated container for each invocation, runs the agent, and remove
 ## Requirements
 
 - Linux or WSL2 with an accessible Docker Engine
-- Bash 4+, Python 3, and the [`devcontainer` CLI](https://github.com/devcontainers/cli)
+- Bash 4+, Python 3, `make`, and the [`devcontainer` CLI](https://github.com/devcontainers/cli) (installed by `make install` when missing)
+- `npm` for the first installation if `devcontainer` is not already on `PATH`
 - Published [temeteke/devcontainer-features](https://github.com/temeteke/devcontainer-features)
 - Host-side `~/.tmux.conf`, `~/.vimrc` and `~/.vim/` must exist (required by the shared terminal Features)
 
-Install Dev Container CLI, for example:
+## Installation
+
+From a checkout of this repository:
 
 ```sh
-npm install -g @devcontainers/cli
+make install
 ```
 
-To install `dcs` from a checkout:
+`make install` installs `dcs` into `~/.local/bin`. If `devcontainer` is already available on `PATH`, it is left unchanged. Otherwise the Makefile uses `npm install --global --prefix "$HOME/.local" @devcontainers/cli` to install the official CLI in your user directory, without `sudo`.
+
+Ensure `~/.local/bin` is on your `PATH` (including for subsequent shell sessions):
 
 ```sh
-install -Dm755 bin/dcs "$HOME/.local/bin/dcs"
+export PATH="$HOME/.local/bin:$PATH"
 ```
 
-Ensure `~/.local/bin` is on your `PATH`.
+On Arch Linux, install npm first if needed (`sudo pacman -S --needed npm`). The official npm package may also require a C/C++ build toolchain (`base-devel`) to compile native dependencies.
+
+To change the install location, run `make PREFIX=/your/prefix install`. To install only the `dcs` script without installing or checking Dev Container CLI, run `make install-dcs`.
 
 ## Usage
 
