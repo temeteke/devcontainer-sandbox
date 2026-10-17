@@ -87,6 +87,7 @@ class TestDcs(unittest.TestCase):
     def test_component_defaults_and_workspace(self):
         components = {
             "python": (IMAGE_PREFIX + "python:latest", set(), "python"),
+            "python:3.12": (IMAGE_PREFIX + "python:3.12", set(), "python"),
             "node": (IMAGE_PREFIX + "javascript-node:latest", set(), "node"),
             "go": (IMAGE_PREFIX + "go:latest", set(), "bash"),
             "rust": (IMAGE_PREFIX + "rust:latest", set(), "bash"),
@@ -180,14 +181,37 @@ class TestDcs(unittest.TestCase):
         _, _, exec_ = self.up_and_exec()
         self.assertEqual(exec_[exec_.index("--") + 1], "python")
 
-    def test_inline_image_reference(self):
-        result = self.run_dcs("python:3.12,opencode")
+    def test_versioned_component(self):
+        # First named: the versioned image provides the language, and its
+        # Feature is skipped.
+        result = self.run_dcs("python:3.12")
         self.assertEqual(result.returncode, 0, result.stderr)
         config = json.loads(self.config.read_text())
-        self.assertEqual(config["image"], "python:3.12")
-        self.assertEqual(set(config["features"]), {FEATURE_PREFIX + "opencode:0"})
+        self.assertEqual(config["image"], IMAGE_PREFIX + "python:3.12")
+        self.assertEqual(config["features"], {})
         _, _, exec_ = self.up_and_exec()
-        self.assertEqual(exec_[exec_.index("--") + 1], "opencode")
+        self.assertEqual(exec_[exec_.index("--") + 1], "python")
+
+        # Image already set: the version becomes the Feature's option.
+        self.log.write_text("")
+        result = self.run_dcs("node,python:3.12")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        config = json.loads(self.config.read_text())
+        self.assertEqual(config["image"], IMAGE_PREFIX + "javascript-node:latest")
+        self.assertEqual(config["features"],
+                         {DEV_FEATURES + "python:1": {"version": "3.12"}})
+        _, _, exec_ = self.up_and_exec()
+        self.assertEqual(exec_[exec_.index("--") + 1], "node")
+
+        self.log.write_text("")
+        result = self.run_dcs("base,python:3.11")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        config = json.loads(self.config.read_text())
+        self.assertEqual(config["image"], BASE_IMAGE)
+        self.assertEqual(config["features"],
+                         {DEV_FEATURES + "python:1": {"version": "3.11"}})
+        _, _, exec_ = self.up_and_exec()
+        self.assertEqual(exec_[exec_.index("--") + 1], "python")
 
     def test_image_option_overrides_component_image(self):
         result = self.run_dcs("--image", "example.com/custom:1", "python")
@@ -298,8 +322,8 @@ class TestDcs(unittest.TestCase):
     def test_help_lists_components_and_rejects_invalid_option(self):
         help_ = self.run_dcs("--help")
         self.assertEqual(help_.returncode, 0)
-        for component in ("python", "node", "go", "rust", "opencode", "codex",
-                          "claude", "tmux", "vim", "base"):
+        for component in ("python", "python:3.12", "node", "go", "rust",
+                          "opencode", "codex", "claude", "tmux", "vim", "base"):
             self.assertIn(component, help_.stdout)
         r = self.run_dcs("--bad")
         self.assertNotEqual(r.returncode, 0)

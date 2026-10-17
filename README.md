@@ -39,11 +39,12 @@ make uninstall
 
 ## Components
 
-The first argument names zero or more components, separated by commas. A component is a named entry that may carry a base image, Dev Container Features, and the command to run. Components are processed in order: a component that carries an image sets it when no image is set yet, and otherwise its Features are added. So the first language gives its image and later ones are layered on as Features. The first component that carries a command is run (and `bash` runs when none does). The `base` component stays where it is when named, and is appended otherwise, so `dcs` on its own starts a `bash` shell.
+The first argument names zero or more components, separated by commas. A component is a named entry that may carry a base image, one Dev Container Feature (with options) and the command to run. Components are processed in order: a component that carries an image sets it when no image is set yet, and otherwise its Feature is added. So the first language gives its image and later ones are layered on as Features. The first component that carries a command is run (and `bash` runs when none does). The `base` component stays where it is when named, and is appended otherwise, so `dcs` on its own starts a `bash` shell.
 
-| Component | Image | Features | Default command |
+| Component | Image | Feature (options) | Default command |
 | --- | --- | --- | --- |
 | `python` | `mcr.microsoft.com/devcontainers/python:latest` | `ghcr.io/devcontainers/features/python:1` | `python` |
+| `python:3.14` … `python:3.10` | `mcr.microsoft.com/devcontainers/python:3.14` … | `ghcr.io/devcontainers/features/python:1` (`version`) | `python` |
 | `node` | `mcr.microsoft.com/devcontainers/javascript-node:latest` | `ghcr.io/devcontainers/features/node:1` | `node` |
 | `go` | `mcr.microsoft.com/devcontainers/go:latest` | `ghcr.io/devcontainers/features/go:1` | `bash` |
 | `rust` | `mcr.microsoft.com/devcontainers/rust:latest` | `ghcr.io/devcontainers/features/rust:1` | `bash` |
@@ -54,7 +55,9 @@ The first argument names zero or more components, separated by commas. A compone
 | `vim` | — | `ghcr.io/temeteke/devcontainer-features/vim:0` | `vim` |
 | `base` | `mcr.microsoft.com/devcontainers/base:ubuntu24.04` | — | — |
 
-A language component carries both an image and a Feature: the first language named uses its (prebuilt) image, and any further ones are installed as Features on top. Its Feature is therefore skipped when its image was the one chosen. Layering a language as a Feature means the container is built (installing the Feature) instead of only pulling a prebuilt image; Docker layer caching makes repeated runs fast. The set is defined in `bin/dcs`; adding a component means adding one `add_component` line there. `dcs --help` prints the same list.
+A language component carries both an image and a Feature: the first language named uses its (prebuilt) image, and any further ones are installed as Features on top. Its Feature is therefore skipped when its image was the one chosen. Layering a language as a Feature means the container is built (installing the Feature) instead of only pulling a prebuilt image; Docker layer caching makes repeated runs fast.
+
+A versioned component such as `python:3.12` pins the language version: when it comes first the image tag does it, and when it is layered on as a Feature the Feature's `version` option does. Adding a component, a version or a Feature option means adding one `add_component` line in `bin/dcs`; `dcs --help` prints the same list.
 
 ## Usage
 
@@ -78,7 +81,8 @@ Name several languages to get all of them. The first uses its image and the rest
 dcs python,node           # the Python image plus the Node Feature
 dcs python,node bash      # both languages, in a shell
 dcs base,python,node      # the plain base image, with languages as Features
-dcs python:3.12,opencode  # a full image reference for the base image
+dcs python:3.12           # the Python 3.12 image
+dcs node,python:3.12      # the Node image, with the Python 3.12 Feature
 ```
 
 The first named component that carries a command runs; for example `dcs python` opens the Python REPL and `dcs base,python` does too because `base` carries no command.
@@ -109,7 +113,7 @@ Use `dcs --help` for the wrapper's options.
 ## Behavior
 
 - **Disposable:** Every call gets a unique `dcs.session` Docker label; the corresponding container is removed at process exit or on normal signals. Built Docker images/layers remain cached.
-- **Components:** The first positional argument names zero or more built-in components (see [Components](#components)). They are processed in order: a component that carries an image sets it when none is set yet, and its Features are added otherwise (without duplicates). The first component that carries a command is run. A component set that omits tmux and Vim needs no host terminal configuration.
+- **Components:** The first positional argument names zero or more built-in components (see [Components](#components)). They are processed in order: a component that carries an image sets it when none is set yet, and its Feature is added otherwise (without duplicates). The first component that carries a command is run. A component set that omits tmux and Vim needs no host terminal configuration.
 - **Command:** dcs options come before the component list, and everything after it is the container command. With no command, `dcs` runs the first component's command, or `bash` when no component carries one; `dcs` on its own appends the `base` component, so it starts a `bash` shell. A command name runs instead of the default command; options are passed to the default command, so `dcs opencode --help` runs `opencode --help`.
 - **Workspace:** The current directory is passed to Dev Container CLI as `--workspace-folder`. `dcs` does not override `--mount-workspace-git-root`, so the CLI's default behavior applies (mounting the Git repository root when detected).
 - **Configuration:** `dcs` generates an ephemeral `devcontainer.json` outside your repository. Existing `.devcontainer` files are ignored and never modified.
