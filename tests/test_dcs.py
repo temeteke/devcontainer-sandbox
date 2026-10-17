@@ -365,6 +365,19 @@ class TestDcs(unittest.TestCase):
         calls = self.calls() if self.log.exists() else []
         self.assertFalse(any(c[:1] == ["devcontainer"] for c in calls))
 
+    def test_component_command_is_an_argv(self):
+        result = self.run_dcs("codex")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        _, _, exec_ = self.up_and_exec()
+        self.assertEqual(exec_[exec_.index("--") + 1:], ["codex", "--no-daemon"])
+
+        # An explicit command replaces the whole default argv.
+        self.log.write_text("")
+        result = self.run_dcs("codex", "codex", "--help")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        _, _, exec_ = self.up_and_exec()
+        self.assertEqual(exec_[exec_.index("--") + 1:], ["codex", "--help"])
+
     def test_command_after_components_replaces_the_default(self):
         # Naming the command runs it, with the following arguments untouched.
         result = self.run_dcs("opencode", "opencode", "--help")

@@ -60,7 +60,7 @@ The first argument names zero or more components, separated by commas. A compone
 | `php:8.5` / `php:8.4` / `php:8.3` | `mcr.microsoft.com/devcontainers/php:<version>` | `ghcr.io/devcontainers/features/php:1` (`version`) | — |
 | `cpp` | `mcr.microsoft.com/devcontainers/cpp:latest` | — | — |
 | `opencode` | — | `ghcr.io/temeteke/devcontainer-features/opencode:0` | `opencode` |
-| `codex` | — | `ghcr.io/temeteke/devcontainer-features/codex:0` | `codex` |
+| `codex` | — | `ghcr.io/temeteke/devcontainer-features/codex:0` | `codex --no-daemon` |
 | `claude` | — | `ghcr.io/temeteke/devcontainer-features/claude-code:0` | `claude` |
 | `tmux` | — | `ghcr.io/temeteke/devcontainer-features/tmux:0` | `tmux` |
 | `vim` | — | `ghcr.io/temeteke/devcontainer-features/vim:0` | `vim` |
@@ -71,7 +71,7 @@ The first argument names zero or more components, separated by commas. A compone
 
 A language component carries both an image and a Feature: the first language named uses its (prebuilt) image, and any further ones are installed as Features on top. Its Feature is therefore skipped when its image was the one chosen. Layering a language as a Feature means the container is built (installing the Feature) instead of only pulling a prebuilt image; Docker layer caching makes repeated runs fast.
 
-A versioned component such as `python:3.12`, `node:22` or `go:1.26` pins the language version: when it comes first the image tag does it, and when it is layered on as a Feature the Feature's `version` option does. Rust images only publish a major-tag image, so `rust:1.87` and friends are Feature-only and run on whatever image the other components chose. `cpp` has no Feature to layer, so it is image-only. Adding a component, a version or a Feature option means adding one `add_component` line in `bin/dcs`; `dcs --help` prints the same list.
+A versioned component such as `python:3.12`, `node:22` or `go:1.26` pins the language version: when it comes first the image tag does it, and when it is layered on as a Feature the Feature's `version` option does. Rust images only publish a major-tag image, so `rust:1.87` and friends are Feature-only and run on whatever image the other components chose. `cpp` has no Feature to layer, so it is image-only. Adding a component, a version or a Feature option means adding one `add_component` line in `bin/dcs`; its command is an argv, so it may carry fixed arguments. `dcs --help` prints the same list.
 
 A component with no command of its own — go, rust, Java, .NET, Ruby, PHP, cpp and the CLI components — leaves the choice to a later component, and `bash` runs when none carries a command. `python`, `node` and the agents, tmux and Vim carry the command they open.
 

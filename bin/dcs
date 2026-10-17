@@ -21,6 +21,8 @@ declare -A COMPONENT_FEATURE=()
 declare -A COMPONENT_FEATURE_OPTIONS=()
 declare -A COMPONENT_COMMAND=()
 # add_component NAME IMAGE FEATURE [FEATURE_OPTIONS] COMMAND
+# COMMAND is an argv: whitespace separates its arguments and it is never
+# evaluated by a shell.
 add_component() {
   COMPONENT_NAMES+=("$1")
   COMPONENT_IMAGE[$1]="$2"
@@ -68,7 +70,7 @@ add_component "php:8.3"     "${IMAGE_PREFIX}php:8.3"                "${DEVCONTAI
 # There is no cpp Feature, so cpp is an image-only component.
 add_component cpp           "${IMAGE_PREFIX}cpp:latest"             ''                                  ''                  ''
 add_component opencode      ''                                      "$FEATURE_PREFIX/opencode:0"        ''                  opencode
-add_component codex         ''                                      "$FEATURE_PREFIX/codex:0"           ''                  codex
+add_component codex         ''                                      "$FEATURE_PREFIX/codex:0"           ''                  'codex --no-daemon'
 add_component claude        ''                                      "$FEATURE_PREFIX/claude-code:0"     ''                  claude
 add_component tmux          ''                                      "$FEATURE_PREFIX/tmux:0"            ''                  tmux
 add_component vim           ''                                      "$FEATURE_PREFIX/vim:0"             ''                  vim
@@ -205,7 +207,7 @@ component_names=("${selected[@]}")
 # Feature is added (so a language can be layered onto another language's
 # image). --image counts as an already-set image.
 resolved_image="$image_option"
-default_command=''
+default_command=()
 declare -A seen_components=()
 declare -A seen_features=()
 declare -A feature_options=()
@@ -224,8 +226,8 @@ for name in "${component_names[@]}"; do
       feature_options[$feature]="${COMPONENT_FEATURE_OPTIONS[$name]}"
     fi
   fi
-  if [[ -z "$default_command" && -n "${COMPONENT_COMMAND[$name]}" ]]; then
-    default_command="${COMPONENT_COMMAND[$name]}"
+  if ((${#default_command[@]} == 0)) && [[ -n "${COMPONENT_COMMAND[$name]}" ]]; then
+    read -r -a default_command <<< "${COMPONENT_COMMAND[$name]}"
   fi
 done
 if ((${#features[@]})); then
@@ -242,8 +244,8 @@ image="$resolved_image"
 [[ -n "$image" ]] || image="$DEFAULT_IMAGE"
 
 if ((${#run_command[@]} == 0)); then
-  if [[ -n "$default_command" ]]; then
-    run_command=("$default_command")
+  if ((${#default_command[@]})); then
+    run_command=("${default_command[@]}")
   else
     run_command=(bash)
   fi
