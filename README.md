@@ -60,6 +60,7 @@ The first argument names zero or more components, separated by commas. A compone
 | `php:8.5` / `php:8.4` / `php:8.3` | `mcr.microsoft.com/devcontainers/php:<version>` | `ghcr.io/devcontainers/features/php:1` (`version`) | — |
 | `cpp` | `mcr.microsoft.com/devcontainers/cpp:latest` | — | — |
 | `opencode` | — | `ghcr.io/temeteke/devcontainer-features/opencode:0` | `opencode` |
+| `pi` | — | `ghcr.io/temeteke/devcontainer-features/pi:0` | `pi` |
 | `codex` | — | `ghcr.io/temeteke/devcontainer-features/codex:0` | `codex` |
 | `claude` | — | `ghcr.io/temeteke/devcontainer-features/claude-code:0` | `claude` |
 | `tmux` | — | `ghcr.io/temeteke/devcontainer-features/tmux:0` | `tmux` |
@@ -88,6 +89,7 @@ That installs the opencode component and runs it. Combine components by separati
 ```sh
 dcs opencode,tmux,vim     # opencode, with tmux and Vim installed
 dcs opencode,python       # opencode on the Python image
+dcs pi                   # Pi Coding Agent TUI
 dcs tmux,opencode         # tmux, with opencode available inside it
 ```
 
