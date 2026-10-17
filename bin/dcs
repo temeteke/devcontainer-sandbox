@@ -1,0 +1,157 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+readonly FEATURE_PREFIX='ghcr.io/temeteke/devcontainer-features'
+readonly DEFAULT_IMAGE='mcr.microsoft.com/devcontainers/base:ubuntu24.04'
+
+usage() {
+  cat <<'HELP'
+Usage: dcs <opencode|codex|claude> [--image IMAGE] [--feature FEATURE ...] [-- AGENT_ARGS...]
+
+Run a coding agent in a new, disposable Dev Container.
+
+  --image IMAGE       Base image (default: mcr.microsoft.com/devcontainers/base:ubuntu24.04)
+  --feature FEATURE   Add a Dev Container Feature (repeatable)
+  --                 Pass the remaining arguments verbatim to the agent
+  -h, --help         Show this help
+
+Each run adds the agent Feature plus tmux and Vim Features. The current
+working directory is the workspace; any existing .devcontainer is ignored.
+Agent state and terminal settings are shared from the host by the Features.
+The container is deleted on exit; built images may remain cached.
+HELP
+}
+
+die() { printf 'dcs: %s\n' "$*" >&2; exit 1; }
+
+if [[ $# -eq 0 ]]; then usage >&2; exit 2; fi
+case "$1" in
+  -h|--help) usage; exit 0 ;;
+  opencode|codex|claude) agent="$1"; shift ;;
+  *) usage >&2; die "unsupported agent: $1" ;;
+esac
+
+image="$DEFAULT_IMAGE"
+features=()
+agent_args=()
+while (($#)); do
+  case "$1" in
+    --image|--feature)
+      opt="$1"
+      (($# >= 2)) || die "missing value for $opt"
+      [[ -n "$2" && "$2" != --* ]] || die "missing value for $opt"
+      if [[ "$opt" == --image ]]; then image="$2"; else features+=("$2"); fi
+      shift 2 ;;
+    --)
+      shift
+      agent_args=("$@")
+      break ;;
+    -h|--help) usage; exit 0 ;;
+    *) die "unknown option: $1 (use -- before agent arguments)" ;;
+  esac
+done
+
+for cmd in docker devcontainer python3; do
+  command -v "$cmd" >/dev/null 2>&1 || die "$cmd is required"
+done
+
+docker info >/dev/null 2>&1 || die 'cannot connect to Docker; check the daemon and permissions'
+
+# Published tmux/Vim Features use these host paths as bind-mount sources.
+[[ -f "$HOME/.tmux.conf" ]] || die 'host ~/.tmux.conf is required by the tmux Feature'
+[[ -f "$HOME/.vimrc" ]] || die 'host ~/.vimrc is required by the Vim Feature'
+[[ -d "$HOME/.vim" ]] || die 'host ~/.vim/ is required by the Vim Feature'
+
+workspace="$(pwd -P)"
+tmp="$(mktemp -d "${TMPDIR:-/tmp}/dcs.XXXXXXXX")" || die 'unable to create temporary directory'
+readonly tmp
+session="$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
+readonly session
+container_id=''
+
+cleanup() {
+  local status=$?
+  trap - EXIT INT TERM
+  local ids
+  if ! ids="$(docker ps -aq --filter "label=dcs.session=$session")"; then
+    printf 'dcs: warning: unable to locate containers for cleanup (session %s)\n' "$session" >&2
+  elif [[ -n "$ids" ]]; then
+    # IDs are Docker-generated hex tokens, one per line.
+    local id
+    while IFS= read -r id; do
+      if [[ -n "$id" ]] && ! docker rm -f "$id" >/dev/null; then
+        printf 'dcs: warning: failed to remove container %s\n' "$id" >&2
+      fi
+    done <<< "$ids"
+  fi
+  rm -rf -- "$tmp"
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+case "$agent" in
+  opencode) agent_feature="$FEATURE_PREFIX/opencode:0" ;;
+  codex) agent_feature="$FEATURE_PREFIX/codex:0" ;;
+  claude) agent_feature="$FEATURE_PREFIX/claude-code:0" ;;
+esac
+
+# Encode user-supplied values as JSON; never interpolate shell data into JSON.
+python3 - "$tmp/devcontainer.json" "$image" "$FEATURE_PREFIX/tmux:0" \
+  "$FEATURE_PREFIX/vim:0" "$agent_feature" "${features[@]}" <<'PY'
+import json
+import sys
+
+output_path, image, *feature_ids = sys.argv[1:]
+features = dict.fromkeys(feature_ids)
+config = {"name": "dcs sandbox", "image": image,
+          "features": {feature: {} for feature in features}}
+with open(output_path, "w", encoding="utf-8") as f:
+    json.dump(config, f, indent=2)
+    f.write("\n")
+PY
+
+printf 'dcs: starting disposable %s container for %s\n' "$agent" "$workspace" >&2
+
+# Use an explicit external config to ignore any existing workspace .devcontainer.
+# --id-label guarantees concurrent runs never share/reuse the same container.
+if ! devcontainer up \
+  --workspace-folder "$workspace" \
+  --config "$tmp/devcontainer.json" \
+  --mount-workspace-git-root=false \
+  --id-label "dcs.session=$session" \
+  --no-lockfile | tee "$tmp/up.log"; then
+  die 'devcontainer up failed'
+fi
+
+# devcontainer up emits a JSON result after its normal progress output.
+container_id="$(python3 - "$tmp/up.log" <<'PY'
+import json
+import sys
+
+container_id = ""
+with open(sys.argv[1], encoding="utf-8") as stream:
+    for line in stream:
+        try:
+            message = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(message, dict) and message.get("outcome") == "success":
+            container_id = message.get("containerId", "")
+if isinstance(container_id, str):
+    print(container_id)
+PY
+)"
+[[ -n "$container_id" ]] || die 'devcontainer up did not return a container ID'
+
+printf 'dcs: running %s\n' "$agent" >&2
+# Do not replace this shell: the EXIT trap must remove the container.
+status=0
+devcontainer exec \
+  --container-id "$container_id" \
+  --workspace-folder "$workspace" \
+  --config "$tmp/devcontainer.json" \
+  --mount-workspace-git-root=false \
+  -- "$agent" "${agent_args[@]}" || status=$?
+exit "$status"

@@ -1,0 +1,16 @@
+name: Test dcs
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Shell syntax
+        run: bash -n bin/dcs
+      - name: Offline CLI tests
+        run: python3 -m unittest discover -s tests -v
