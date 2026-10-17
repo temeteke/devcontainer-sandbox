@@ -74,12 +74,20 @@ class TestDcs(unittest.TestCase):
     def calls(self):
         return [json.loads(x) for x in self.log.read_text().splitlines()]
 
-    def test_agents_features_and_workspace(self):
-        for agent, feature in (("opencode", "opencode"), ("codex", "codex"),
-                               ("claude", "claude-code")):
-            with self.subTest(agent=agent):
+    def test_profiles_features_and_workspace(self):
+        prefix = "ghcr.io/temeteke/devcontainer-features/"
+        terminal = {prefix + "tmux:0", prefix + "vim:0"}
+        profiles = {
+            "minimal": set(),
+            "base": set(terminal),
+            "opencode": terminal | {prefix + "opencode:0"},
+            "codex": terminal | {prefix + "codex:0"},
+            "claude": terminal | {prefix + "claude-code:0"},
+        }
+        for profile, expected in profiles.items():
+            with self.subTest(profile=profile):
                 self.log.write_text("")
-                result = self.run_dcs(agent)
+                result = self.run_dcs(profile)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 calls = self.calls()
                 up = next(c for c in calls if c[:2] == ["devcontainer", "up"])
@@ -88,12 +96,13 @@ class TestDcs(unittest.TestCase):
                 self.assertFalse(any(arg.startswith("--mount-workspace-git-root") for arg in exec_))
                 self.assertEqual(up[up.index("--workspace-folder") + 1], str(self.workspace))
                 self.assertIn("--no-lockfile", up)
-                self.assertIn("dcs.session=", up[up.index("--id-label")+1])
+                session = up[up.index("--id-label")+1]
+                self.assertTrue(session.startswith("dcs.session="))
+                self.assertNotIn("--container-id", exec_)
+                self.assertEqual(exec_[exec_.index("--id-label")+1], session)
                 self.assertEqual(exec_[exec_.index("--")+1], "bash")
                 config = json.loads(self.config.read_text())
-                features = config["features"]
-                prefix = "ghcr.io/temeteke/devcontainer-features/"
-                self.assertEqual(set(features), {prefix+"tmux:0", prefix+"vim:0", prefix+feature+":0"})
+                self.assertEqual(set(config["features"]), expected)
                 self.assertEqual(calls[-1][:3], ["docker", "rm", "-f"])
 
     def test_image_and_extra_features_and_command(self):
@@ -109,13 +118,23 @@ class TestDcs(unittest.TestCase):
         exec_ = next(c for c in self.calls() if c[:2] == ["devcontainer", "exec"])
         self.assertEqual(exec_[exec_.index("--")+1:], ["echo", "hello world"])
 
+    def test_generated_config_escapes_json_values(self):
+        weird_image = 'weird"image\\path'
+        weird_feature = 'example.com/"quoted"/feature\\name:0'
+        result = self.run_dcs("minimal", "--image", weird_image,
+                              "--feature", weird_feature)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        cfg = json.loads(self.config.read_text())
+        self.assertEqual(cfg["image"], weird_image)
+        self.assertEqual(set(cfg["features"]), {weird_feature})
+
     def test_positional_command_and_args_are_forwarded(self):
         result = self.run_dcs("opencode", "tmux", "new", "-s", "dev")
         self.assertEqual(result.returncode, 0, result.stderr)
         exec_ = next(c for c in self.calls() if c[:2] == ["devcontainer", "exec"])
         self.assertEqual(exec_[exec_.index("--")+1:], ["tmux", "new", "-s", "dev"])
 
-    def test_agent_failure_preserves_status_and_cleans_up(self):
+    def test_command_failure_preserves_status_and_cleans_up(self):
         r = self.run_dcs("opencode", MOCK_EXEC_EXIT="37")
         self.assertEqual(r.returncode, 37, r.stderr)
         self.assertTrue(any(c[:3] == ["docker", "rm", "-f"] for c in self.calls()))
@@ -126,15 +145,27 @@ class TestDcs(unittest.TestCase):
         self.assertFalse(any(c[:2] == ["devcontainer", "exec"] for c in self.calls()))
         self.assertTrue(any(c[:3] == ["docker", "rm", "-f"] for c in self.calls()))
 
-    def test_missing_host_config_fails_before_up(self):
-        (self.home / ".vimrc").unlink()
-        r = self.run_dcs("codex")
-        self.assertNotEqual(r.returncode, 0)
-        self.assertIn("~/.vimrc", r.stderr)
-        self.assertFalse(self.config.exists())
+    def test_host_config_is_not_required(self):
+        for name in (".tmux.conf", ".vimrc"):
+            (self.home / name).unlink()
+        (self.home / ".vim").rmdir()
+        r = self.run_dcs("opencode")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(any(c[:2] == ["devcontainer", "up"] for c in self.calls()))
 
-    def test_help_and_invalid_option(self):
-        self.assertEqual(self.run_dcs("--help").returncode, 0)
+    def test_unknown_profile_is_rejected(self):
+        r = self.run_dcs("nope")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("unknown profile", r.stderr)
+        self.assertFalse(self.config.exists())
+        calls = self.calls() if self.log.exists() else []
+        self.assertFalse(any(c[:2] == ["devcontainer", "up"] for c in calls))
+
+    def test_help_lists_profiles_and_rejects_invalid_option(self):
+        help_ = self.run_dcs("--help")
+        self.assertEqual(help_.returncode, 0)
+        for profile in ("minimal", "base", "opencode", "codex", "claude"):
+            self.assertIn(profile, help_.stdout)
         r = self.run_dcs("opencode", "--bad")
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("unknown option", r.stderr)

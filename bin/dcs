@@ -4,28 +4,59 @@ set -euo pipefail
 readonly FEATURE_PREFIX='ghcr.io/temeteke/devcontainer-features'
 readonly DEFAULT_IMAGE='mcr.microsoft.com/devcontainers/base:ubuntu24.04'
 
+# Profiles. The first positional argument selects one, and each profile lists
+# every Dev Container Feature it installs (space separated). Add a profile with
+# one add_profile line; omit tmux/Vim for a bare sandbox. The tmux and Vim
+# Features bind-mount host files (see README).
+PROFILE_NAMES=()
+declare -A PROFILE_FEATURES=()
+add_profile() {
+  PROFILE_NAMES+=("$1")
+  PROFILE_FEATURES[$1]="$2"
+}
+
+add_profile minimal  ''
+add_profile base     "$FEATURE_PREFIX/tmux:0 $FEATURE_PREFIX/vim:0"
+add_profile opencode "$FEATURE_PREFIX/tmux:0 $FEATURE_PREFIX/vim:0 $FEATURE_PREFIX/opencode:0"
+add_profile codex    "$FEATURE_PREFIX/tmux:0 $FEATURE_PREFIX/vim:0 $FEATURE_PREFIX/codex:0"
+add_profile claude   "$FEATURE_PREFIX/tmux:0 $FEATURE_PREFIX/vim:0 $FEATURE_PREFIX/claude-code:0"
+
+profile_list() {
+  local name feature shown
+  for name in "${PROFILE_NAMES[@]}"; do
+    shown=''
+    # Unquoted on purpose: split the space-separated Feature list (no globs).
+    for feature in ${PROFILE_FEATURES[$name]}; do
+      shown+="${shown:+ }${feature#"$FEATURE_PREFIX"/}"
+    done
+    printf '  %-9s %s\n' "$name" "${shown:-(none)}"
+  done
+}
+
 usage() {
-  cat <<'HELP'
-Usage: dcs <opencode|codex|claude> [--image IMAGE] [--feature FEATURE ...] [--] [COMMAND [ARG ...]]
+  cat <<HELP
+Usage: dcs <PROFILE> [--image IMAGE] [--feature FEATURE ...] [--] [COMMAND [ARG ...]]
 
-Run a coding agent in a new, disposable Dev Container.
+Run a command in a new, disposable Dev Container.
 
-  --image IMAGE       Base image (default: mcr.microsoft.com/devcontainers/base:ubuntu24.04)
+  --image IMAGE       Base image (default: $DEFAULT_IMAGE)
   --feature FEATURE   Add a Dev Container Feature (repeatable)
   --                  End of options; treat the rest as COMMAND and its arguments
   -h, --help          Show this help
 
-With no COMMAND, an interactive bash shell is started. Otherwise COMMAND is
-run inside the container. The first argument that is not an option starts
-COMMAND, and every following argument is passed through as-is (use -- when
-COMMAND itself begins with a dash).
+Profiles (Features added on top of the base image):
+$(profile_list)
 
-Each run adds the agent Feature plus tmux and Vim Features, so the agent can
-be started by hand. The current working directory is passed to Dev Container
-CLI as the workspace folder; Dev Container CLI chooses the mount root.
-Existing .devcontainer is ignored. Agent state and terminal settings are
-shared from the host by the Features. The container is deleted on exit;
-built images may remain cached.
+With no COMMAND, an interactive bash shell is started. Otherwise COMMAND is run
+inside the container. The first argument that is not an option starts COMMAND,
+and every following argument is passed through as-is (use -- when COMMAND itself
+begins with a dash).
+
+Each profile installs its own set of Features. The current working directory is
+passed to Dev Container CLI as the workspace folder; Dev Container CLI chooses
+the mount root. Existing .devcontainer is ignored. Agent state and terminal
+settings are shared from the host by those Features. The container is deleted on
+exit; built images may remain cached.
 HELP
 }
 
@@ -34,14 +65,13 @@ die() { printf 'dcs: %s\n' "$*" >&2; exit 1; }
 if [[ $# -eq 0 ]]; then usage >&2; exit 2; fi
 case "$1" in
   -h|--help) usage; exit 0 ;;
-  opencode|codex|claude) agent="$1"; shift ;;
-  *) usage >&2; die "unsupported agent: $1" ;;
+  *) profile="$1"; shift ;;
 esac
+[[ -n "${PROFILE_FEATURES[$profile]+x}" ]] || { usage >&2; die "unknown profile: $profile"; }
 
 image="$DEFAULT_IMAGE"
 features=()
-agent_command=()
-default_shell=0
+run_command=()
 while (($#)); do
   case "$1" in
     --image|--feature)
@@ -52,38 +82,31 @@ while (($#)); do
       shift 2 ;;
     --)
       shift
-      agent_command=("$@")
+      run_command=("$@")
       break ;;
     -h|--help) usage; exit 0 ;;
     -*) die "unknown option: $1" ;;
     *)
       # The first non-option argument starts the in-container command.
-      agent_command=("$@")
+      run_command=("$@")
       break ;;
   esac
 done
-if ((${#agent_command[@]} == 0)); then
-  agent_command=(bash)
-  default_shell=1
+if ((${#run_command[@]} == 0)); then
+  run_command=(bash)
 fi
 
-for cmd in docker devcontainer python3; do
+for cmd in docker devcontainer; do
   command -v "$cmd" >/dev/null 2>&1 || die "$cmd is required"
 done
 
 docker info >/dev/null 2>&1 || die 'cannot connect to Docker; check the daemon and permissions'
 
-# Published tmux/Vim Features use these host paths as bind-mount sources.
-[[ -f "$HOME/.tmux.conf" ]] || die 'host ~/.tmux.conf is required by the tmux Feature'
-[[ -f "$HOME/.vimrc" ]] || die 'host ~/.vimrc is required by the Vim Feature'
-[[ -d "$HOME/.vim" ]] || die 'host ~/.vim/ is required by the Vim Feature'
-
 workspace="$(pwd -P)"
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/dcs.XXXXXXXX")" || die 'unable to create temporary directory'
 readonly tmp
-session="$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
+session="$(cat /proc/sys/kernel/random/uuid)" || die 'unable to generate a session ID'
 readonly session
-container_id=''
 
 cleanup() {
   local status=$?
@@ -107,68 +130,52 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-case "$agent" in
-  opencode) agent_feature="$FEATURE_PREFIX/opencode:0" ;;
-  codex) agent_feature="$FEATURE_PREFIX/codex:0" ;;
-  claude) agent_feature="$FEATURE_PREFIX/claude-code:0" ;;
-esac
+profile_features=()
+if [[ -n "${PROFILE_FEATURES[$profile]}" ]]; then
+  read -r -a profile_features <<< "${PROFILE_FEATURES[$profile]}"
+fi
 
-# Encode user-supplied values as JSON; never interpolate shell data into JSON.
-python3 - "$tmp/devcontainer.json" "$image" "$FEATURE_PREFIX/tmux:0" \
-  "$FEATURE_PREFIX/vim:0" "$agent_feature" "${features[@]}" <<'PY'
-import json
-import sys
+# Emit a JSON string. Values are image and Feature references, so escaping \\
+# and " is enough; shell data is never interpolated unescaped.
+json_string() {
+  local value="$1"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  printf '"%s"' "$value"
+}
 
-output_path, image, *feature_ids = sys.argv[1:]
-features = dict.fromkeys(feature_ids)
-config = {"name": "dcs sandbox", "image": image,
-          "features": {feature: {} for feature in features}}
-with open(output_path, "w", encoding="utf-8") as f:
-    json.dump(config, f, indent=2)
-    f.write("\n")
-PY
+# A Feature that is both in the profile and passed via --feature yields a
+# repeated key; JSON parsers keep the last, and every value is {}.
+{
+  printf '{\n'
+  printf '  "name": "dcs sandbox",\n'
+  printf '  "image": %s,\n' "$(json_string "$image")"
+  printf '  "features": {'
+  separator=''
+  for feature in "${profile_features[@]}" "${features[@]}"; do
+    printf '%s%s: {}' "$separator" "$(json_string "$feature")"
+    separator=', '
+  done
+  printf '}\n'
+  printf '}\n'
+} > "$tmp/devcontainer.json"
 
-printf 'dcs: starting disposable %s container for %s\n' "$agent" "$workspace" >&2
+printf 'dcs: creating a disposable container for %s\n' "$workspace" >&2
 
 # Use an explicit external config to ignore any existing workspace .devcontainer.
 # --id-label guarantees concurrent runs never share/reuse the same container.
-if ! devcontainer up \
+devcontainer up \
   --workspace-folder "$workspace" \
   --config "$tmp/devcontainer.json" \
   --id-label "dcs.session=$session" \
-  --no-lockfile | tee "$tmp/up.log"; then
-  die 'devcontainer up failed'
-fi
+  --no-lockfile || die 'devcontainer up failed'
 
-# devcontainer up emits a JSON result after its normal progress output.
-container_id="$(python3 - "$tmp/up.log" <<'PY'
-import json
-import sys
-
-container_id = ""
-with open(sys.argv[1], encoding="utf-8") as stream:
-    for line in stream:
-        try:
-            message = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(message, dict) and message.get("outcome") == "success":
-            container_id = message.get("containerId", "")
-if isinstance(container_id, str):
-    print(container_id)
-PY
-)"
-[[ -n "$container_id" ]] || die 'devcontainer up did not return a container ID'
-
-printf 'dcs: running %s\n' "$agent" >&2
-if ((default_shell)); then
-  printf "dcs: '%s' is installed; start it here (tmux and vim are also available)\n" "$agent" >&2
-fi
 # Do not replace this shell: the EXIT trap must remove the container.
+# exec looks the container up from the same dcs.session label.
 status=0
 devcontainer exec \
-  --container-id "$container_id" \
   --workspace-folder "$workspace" \
   --config "$tmp/devcontainer.json" \
-  -- "${agent_command[@]}" || status=$?
+  --id-label "dcs.session=$session" \
+  -- "${run_command[@]}" || status=$?
 exit "$status"
