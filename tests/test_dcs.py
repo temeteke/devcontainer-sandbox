@@ -96,9 +96,19 @@ class TestDcs(unittest.TestCase):
             # Rust images publish no minor tags, so a versioned Rust component
             # is Feature-only and runs on the base image.
             "rust:1.87": (BASE_IMAGE, {DEV_FEATURES + "rust:1"}, "bash"),
+            "java": (IMAGE_PREFIX + "java:latest", set(), "bash"),
+            "java:21": (IMAGE_PREFIX + "java:21", set(), "bash"),
+            "dotnet": (IMAGE_PREFIX + "dotnet:latest", set(), "bash"),
+            "dotnet:9.0": (IMAGE_PREFIX + "dotnet:9.0", set(), "bash"),
+            "ruby": (IMAGE_PREFIX + "ruby:latest", set(), "bash"),
+            "ruby:3.4": (IMAGE_PREFIX + "ruby:3.4", set(), "bash"),
+            "php": (IMAGE_PREFIX + "php:latest", set(), "bash"),
+            "php:8.4": (IMAGE_PREFIX + "php:8.4", set(), "bash"),
+            # cpp has no Feature, so it is an image-only component.
+            "cpp": (IMAGE_PREFIX + "cpp:latest", set(), "bash"),
+            "playwright": (BASE_IMAGE, {FEATURE_PREFIX + "playwright:0"}, "bash"),
             "opencode": (BASE_IMAGE, {FEATURE_PREFIX + "opencode:0"}, "opencode"),
             "pi": (BASE_IMAGE, {FEATURE_PREFIX + "pi:0"}, "pi"),
-            "dsh": (BASE_IMAGE, {FEATURE_PREFIX + "dsh:0"}, "dsh"),
             "codex": (BASE_IMAGE, {FEATURE_PREFIX + "codex:0"}, "codex"),
             "claude": (BASE_IMAGE, {FEATURE_PREFIX + "claude-code:0"}, "claude"),
             "tmux": (BASE_IMAGE, {FEATURE_PREFIX + "tmux:0"}, "tmux"),
@@ -144,34 +154,21 @@ class TestDcs(unittest.TestCase):
         _, _, exec_ = self.up_and_exec()
         self.assertEqual(exec_[exec_.index("--") + 1], "opencode")
 
-    def test_added_agent_component_combinations(self):
-        cases = {
-            "pi,python": ({FEATURE_PREFIX + "pi:0"}, IMAGE_PREFIX + "python:latest", "pi"),
-            "dsh,pi": ({FEATURE_PREFIX + "dsh:0", FEATURE_PREFIX + "pi:0"}, BASE_IMAGE, "dsh"),
-        }
-        for components, (features, image, command) in cases.items():
-            with self.subTest(components=components):
-                self.log.write_text("")
-                result = self.run_dcs(components)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                config = json.loads(self.config.read_text())
-                self.assertEqual(config["image"], image)
-                self.assertEqual(set(config["features"]), features)
-                _, _, exec_ = self.up_and_exec()
-                self.assertEqual(exec_[exec_.index("--") + 1], command)
-
-    def test_dsh_headless_flags_forwarded(self):
-        result = self.run_dcs("dsh", "--profile", "headless", "Summarize this repository")
+    def test_pi_with_python(self):
+        result = self.run_dcs("pi,python")
         self.assertEqual(result.returncode, 0, result.stderr)
+        config = json.loads(self.config.read_text())
+        self.assertEqual(config["image"], IMAGE_PREFIX + "python:latest")
+        self.assertEqual(config["features"], {FEATURE_PREFIX + "pi:0": {}})
         _, _, exec_ = self.up_and_exec()
-        self.assertEqual(exec_[exec_.index("--") + 1:],
-                         ["dsh", "--profile", "headless", "Summarize this repository"])
+        self.assertEqual(exec_[exec_.index("--") + 1:], ["pi"])
 
     def test_first_image_and_command_win(self):
         cases = {
             "python,node": (IMAGE_PREFIX + "python:latest", "python"),
             "node,python": (IMAGE_PREFIX + "javascript-node:latest", "node"),
-            "go,opencode": (IMAGE_PREFIX + "go:latest", "bash"),
+            # go carries no command, so opencode is the first one that does.
+            "go,opencode": (IMAGE_PREFIX + "go:latest", "opencode"),
             "opencode,python": (IMAGE_PREFIX + "python:latest", "opencode"),
         }
         for components, (image, command) in cases.items():
@@ -256,8 +253,17 @@ class TestDcs(unittest.TestCase):
             # Layered on another image, the version goes to the Feature.
             "base,node:22": (BASE_IMAGE,
                              {DEV_FEATURES + "node:1": {"version": "22"}}, "node"),
+            # go and rust carry no command, so opencode decides what runs.
             "go:1.26,opencode": (IMAGE_PREFIX + "go:1.26",
-                                 {FEATURE_PREFIX + "opencode:0": {}}, "bash"),
+                                 {FEATURE_PREFIX + "opencode:0": {}}, "opencode"),
+            "base,java:21": (BASE_IMAGE,
+                             {DEV_FEATURES + "java:1": {"version": "21"}}, "bash"),
+            "base,dotnet:9.0": (BASE_IMAGE,
+                                {DEV_FEATURES + "dotnet:2": {"version": "9.0"}}, "bash"),
+            "base,ruby:3.4": (BASE_IMAGE,
+                              {DEV_FEATURES + "ruby:2": {"version": "3.4"}}, "bash"),
+            "base,php:8.4": (BASE_IMAGE,
+                             {DEV_FEATURES + "php:1": {"version": "8.4"}}, "bash"),
         }
         for components, (image, features, command) in cases.items():
             with self.subTest(components=components):
@@ -380,8 +386,8 @@ class TestDcs(unittest.TestCase):
         help_ = self.run_dcs("--help")
         self.assertEqual(help_.returncode, 0)
         for component in ("python", "python:3.12", "node", "node:22",
-                          "go:1.26", "rust:1.87", "opencode", "codex",
-                          "claude", "pi", "dsh", "tmux", "vim", "base"):
+                          "go:1.26", "rust:1.87", "opencode", "pi", "codex",
+                          "claude", "tmux", "vim", "base"):
             self.assertIn(component, help_.stdout)
         r = self.run_dcs("--bad")
         self.assertNotEqual(r.returncode, 0)
