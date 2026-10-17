@@ -89,25 +89,31 @@ class TestDcs(unittest.TestCase):
                 self.assertEqual(up[up.index("--workspace-folder") + 1], str(self.workspace))
                 self.assertIn("--no-lockfile", up)
                 self.assertIn("dcs.session=", up[up.index("--id-label")+1])
-                self.assertEqual(exec_[exec_.index("--")+1], agent)
+                self.assertEqual(exec_[exec_.index("--")+1], "bash")
                 config = json.loads(self.config.read_text())
                 features = config["features"]
                 prefix = "ghcr.io/temeteke/devcontainer-features/"
                 self.assertEqual(set(features), {prefix+"tmux:0", prefix+"vim:0", prefix+feature+":0"})
                 self.assertEqual(calls[-1][:3], ["docker", "rm", "-f"])
 
-    def test_image_and_extra_features_and_agent_args(self):
+    def test_image_and_extra_features_and_command(self):
         result = self.run_dcs("codex", "--image", "python:3.12",
                               "--feature", "ghcr.io/devcontainers/features/go:1",
                               "--feature", "ghcr.io/devcontainers/features/rust:1",
-                              "--", "--model", "gpt-6", "hello world")
+                              "--", "echo", "hello world")
         self.assertEqual(result.returncode, 0, result.stderr)
         cfg = json.loads(self.config.read_text())
         self.assertEqual(cfg["image"], "python:3.12")
         self.assertIn("ghcr.io/devcontainers/features/go:1", cfg["features"])
         self.assertIn("ghcr.io/devcontainers/features/rust:1", cfg["features"])
         exec_ = next(c for c in self.calls() if c[:2] == ["devcontainer", "exec"])
-        self.assertEqual(exec_[-5:], ["--", "codex", "--model", "gpt-6", "hello world"])
+        self.assertEqual(exec_[exec_.index("--")+1:], ["echo", "hello world"])
+
+    def test_positional_command_and_args_are_forwarded(self):
+        result = self.run_dcs("opencode", "tmux", "new", "-s", "dev")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        exec_ = next(c for c in self.calls() if c[:2] == ["devcontainer", "exec"])
+        self.assertEqual(exec_[exec_.index("--")+1:], ["tmux", "new", "-s", "dev"])
 
     def test_agent_failure_preserves_status_and_cleans_up(self):
         r = self.run_dcs("opencode", MOCK_EXEC_EXIT="37")

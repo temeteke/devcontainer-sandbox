@@ -1,7 +1,7 @@
 # devcontainer-sandbox
 
 `dcs` (Dev Container Sandbox) runs coding agents in disposable [Dev Containers](https://containers.dev/).
-It creates an isolated container for each invocation, runs the agent, and removes that container when the agent exits. Source files and selected agent/terminal settings are deliberately shared with the host.
+It creates an isolated container for each invocation, runs the command you choose (an interactive bash shell by default), and removes that container when the command exits. Source files and selected agent/terminal settings are deliberately shared with the host.
 
 ## Requirements
 
@@ -43,9 +43,22 @@ From the project directory you want to edit:
 
 ```sh
 dcs opencode
-dcs codex
-dcs claude
 ```
+
+With no command, `dcs` starts an interactive bash shell in a fresh container that already has the matching agent installed (plus tmux and vim). Start the agent yourself from that shell:
+
+```sh
+opencode
+```
+
+Name a command after the agent to run it directly instead of the shell. The first argument that is not a wrapper option starts the command, and every following argument is passed through unchanged:
+
+```sh
+dcs opencode tmux                 # start tmux
+dcs opencode opencode --help      # pass --help to opencode
+```
+
+`--` ends the wrapper's option parsing, and the arguments after it are the command and its arguments. It behaves like the first non-option argument, with one difference: it also lets a command name that begins with a dash be passed.
 
 Use a different base image and add extra Features:
 
@@ -54,24 +67,19 @@ dcs codex --image mcr.microsoft.com/devcontainers/python:3.12-bookworm \
   --feature ghcr.io/devcontainers/features/go:1
 ```
 
-Pass agent arguments after `--`:
-
-```sh
-dcs codex -- --help
-```
-
 Use `dcs --help` for the wrapper's options.
 
 ## Behavior
 
 - **Disposable:** Every call gets a unique `dcs.session` Docker label; the corresponding container is removed at process exit or on normal signals. Built Docker images/layers remain cached.
+- **Command:** With no command, `dcs` runs `bash` interactively (the base image's user has bash). Name a command to run something else, such as the installed agent. The wrapper's own options must come before the command.
 - **Workspace:** The current directory is passed to Dev Container CLI as `--workspace-folder`. `dcs` does not override `--mount-workspace-git-root`, so the CLI's default behavior applies (mounting the Git repository root when detected).
 - **Configuration:** `dcs` generates an ephemeral `devcontainer.json` outside your repository. Existing `.devcontainer` files are ignored and never modified.
-- **Agents:** `opencode`, `codex`, and `claude` automatically enable the matching `ghcr.io/temeteke/devcontainer-features/{opencode,codex,claude-code}:0` Feature.
+- **Agents:** `opencode`, `codex`, and `claude` automatically enable the matching `ghcr.io/temeteke/devcontainer-features/{opencode,codex,claude-code}:0` Feature. The agent is not started automatically; launch it from the shell (or name it as the command).
 - **Terminal tools:** `tmux:0` and `vim:0` Features are always added.
 - **Custom tools:** `--feature` may be repeated. Each Feature is configured with its default options.
 - **Image:** Defaults to `mcr.microsoft.com/devcontainers/base:ubuntu24.04`. The published tmux and Vim Features require a Debian/Ubuntu-compatible image with `apt-get`.
-- **Lifecycle:** `devcontainer up` builds/starts the container and applies Feature lifecycle hooks. `devcontainer exec` runs the selected agent. `docker rm -f` cleans up only the container labeled for this invocation.
+- **Lifecycle:** `devcontainer up` builds/starts the container and applies Feature lifecycle hooks. `devcontainer exec` runs the selected command. `docker rm -f` cleans up only the container labeled for this invocation.
 
 The wrapper deliberately does not implement persistent container management, `.devcontainer` generation, or a generic shell subcommand. For persistent environments, use Dev Container CLI and Templates directly.
 

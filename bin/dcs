@@ -6,20 +6,26 @@ readonly DEFAULT_IMAGE='mcr.microsoft.com/devcontainers/base:ubuntu24.04'
 
 usage() {
   cat <<'HELP'
-Usage: dcs <opencode|codex|claude> [--image IMAGE] [--feature FEATURE ...] [-- AGENT_ARGS...]
+Usage: dcs <opencode|codex|claude> [--image IMAGE] [--feature FEATURE ...] [--] [COMMAND [ARG ...]]
 
 Run a coding agent in a new, disposable Dev Container.
 
   --image IMAGE       Base image (default: mcr.microsoft.com/devcontainers/base:ubuntu24.04)
   --feature FEATURE   Add a Dev Container Feature (repeatable)
-  --                 Pass the remaining arguments verbatim to the agent
-  -h, --help         Show this help
+  --                  End of options; treat the rest as COMMAND and its arguments
+  -h, --help          Show this help
 
-Each run adds the agent Feature plus tmux and Vim Features. The current
-working directory is passed to Dev Container CLI as the workspace folder;
-Dev Container CLI chooses the mount root. Existing .devcontainer is ignored.
-Agent state and terminal settings are shared from the host by the Features.
-The container is deleted on exit; built images may remain cached.
+With no COMMAND, an interactive bash shell is started. Otherwise COMMAND is
+run inside the container. The first argument that is not an option starts
+COMMAND, and every following argument is passed through as-is (use -- when
+COMMAND itself begins with a dash).
+
+Each run adds the agent Feature plus tmux and Vim Features, so the agent can
+be started by hand. The current working directory is passed to Dev Container
+CLI as the workspace folder; Dev Container CLI chooses the mount root.
+Existing .devcontainer is ignored. Agent state and terminal settings are
+shared from the host by the Features. The container is deleted on exit;
+built images may remain cached.
 HELP
 }
 
@@ -34,7 +40,8 @@ esac
 
 image="$DEFAULT_IMAGE"
 features=()
-agent_args=()
+agent_command=()
+default_shell=0
 while (($#)); do
   case "$1" in
     --image|--feature)
@@ -45,12 +52,20 @@ while (($#)); do
       shift 2 ;;
     --)
       shift
-      agent_args=("$@")
+      agent_command=("$@")
       break ;;
     -h|--help) usage; exit 0 ;;
-    *) die "unknown option: $1 (use -- before agent arguments)" ;;
+    -*) die "unknown option: $1" ;;
+    *)
+      # The first non-option argument starts the in-container command.
+      agent_command=("$@")
+      break ;;
   esac
 done
+if ((${#agent_command[@]} == 0)); then
+  agent_command=(bash)
+  default_shell=1
+fi
 
 for cmd in docker devcontainer python3; do
   command -v "$cmd" >/dev/null 2>&1 || die "$cmd is required"
@@ -146,11 +161,14 @@ PY
 [[ -n "$container_id" ]] || die 'devcontainer up did not return a container ID'
 
 printf 'dcs: running %s\n' "$agent" >&2
+if ((default_shell)); then
+  printf "dcs: '%s' is installed; start it here (tmux and vim are also available)\n" "$agent" >&2
+fi
 # Do not replace this shell: the EXIT trap must remove the container.
 status=0
 devcontainer exec \
   --container-id "$container_id" \
   --workspace-folder "$workspace" \
   --config "$tmp/devcontainer.json" \
-  -- "$agent" "${agent_args[@]}" || status=$?
+  -- "${agent_command[@]}" || status=$?
 exit "$status"
