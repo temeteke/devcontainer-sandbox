@@ -46,22 +46,34 @@ The first argument names zero or more components, separated by commas. A compone
 | `python:3.14` … `python:3.10` | `mcr.microsoft.com/devcontainers/python:<version>` | `ghcr.io/devcontainers/features/python:1` (`version`) | `python` |
 | `node` | `mcr.microsoft.com/devcontainers/javascript-node:latest` | `ghcr.io/devcontainers/features/node:1` | `node` |
 | `node:24` / `node:22` / `node:20` | `mcr.microsoft.com/devcontainers/javascript-node:<version>` | `ghcr.io/devcontainers/features/node:1` (`version`) | `node` |
-| `go` | `mcr.microsoft.com/devcontainers/go:latest` | `ghcr.io/devcontainers/features/go:1` | `bash` |
-| `go:1.27` / `go:1.26` / `go:1.25` | `mcr.microsoft.com/devcontainers/go:<version>` | `ghcr.io/devcontainers/features/go:1` (`version`) | `bash` |
-| `rust` | `mcr.microsoft.com/devcontainers/rust:latest` | `ghcr.io/devcontainers/features/rust:1` | `bash` |
-| `rust:1.87` / `rust:1.86` / `rust:1.85` | — | `ghcr.io/devcontainers/features/rust:1` (`version`) | `bash` |
+| `go` | `mcr.microsoft.com/devcontainers/go:latest` | `ghcr.io/devcontainers/features/go:1` | — |
+| `go:1.27` / `go:1.26` / `go:1.25` | `mcr.microsoft.com/devcontainers/go:<version>` | `ghcr.io/devcontainers/features/go:1` (`version`) | — |
+| `rust` | `mcr.microsoft.com/devcontainers/rust:latest` | `ghcr.io/devcontainers/features/rust:1` | — |
+| `rust:1.87` / `rust:1.86` / `rust:1.85` | — | `ghcr.io/devcontainers/features/rust:1` (`version`) | — |
+| `java` | `mcr.microsoft.com/devcontainers/java:latest` | `ghcr.io/devcontainers/features/java:1` | — |
+| `java:25` / `java:21` / `java:17` | `mcr.microsoft.com/devcontainers/java:<version>` | `ghcr.io/devcontainers/features/java:1` (`version`) | — |
+| `dotnet` | `mcr.microsoft.com/devcontainers/dotnet:latest` | `ghcr.io/devcontainers/features/dotnet:2` | — |
+| `dotnet:10.0` / `dotnet:9.0` / `dotnet:8.0` | `mcr.microsoft.com/devcontainers/dotnet:<version>` | `ghcr.io/devcontainers/features/dotnet:2` (`version`) | — |
+| `ruby` | `mcr.microsoft.com/devcontainers/ruby:latest` | `ghcr.io/devcontainers/features/ruby:2` | — |
+| `ruby:3.4` / `ruby:3.3` / `ruby:3.2` | `mcr.microsoft.com/devcontainers/ruby:<version>` | `ghcr.io/devcontainers/features/ruby:2` (`version`) | — |
+| `php` | `mcr.microsoft.com/devcontainers/php:latest` | `ghcr.io/devcontainers/features/php:1` | — |
+| `php:8.5` / `php:8.4` / `php:8.3` | `mcr.microsoft.com/devcontainers/php:<version>` | `ghcr.io/devcontainers/features/php:1` (`version`) | — |
+| `cpp` | `mcr.microsoft.com/devcontainers/cpp:latest` | — | — |
 | `opencode` | — | `ghcr.io/temeteke/devcontainer-features/opencode:0` | `opencode` |
 | `codex` | — | `ghcr.io/temeteke/devcontainer-features/codex:0` | `codex` |
 | `claude` | — | `ghcr.io/temeteke/devcontainer-features/claude-code:0` | `claude` |
 | `tmux` | — | `ghcr.io/temeteke/devcontainer-features/tmux:0` | `tmux` |
 | `vim` | — | `ghcr.io/temeteke/devcontainer-features/vim:0` | `vim` |
+| `playwright` | — | `ghcr.io/temeteke/devcontainer-features/playwright:0` | — |
 | `gitlab-cli` | — | `ghcr.io/temeteke/devcontainer-features/gitlab-cli:0` | — |
 | `github-cli` | — | `ghcr.io/devcontainers/features/github-cli:1` | — |
 | `base` | `mcr.microsoft.com/devcontainers/base:ubuntu24.04` | — | — |
 
 A language component carries both an image and a Feature: the first language named uses its (prebuilt) image, and any further ones are installed as Features on top. Its Feature is therefore skipped when its image was the one chosen. Layering a language as a Feature means the container is built (installing the Feature) instead of only pulling a prebuilt image; Docker layer caching makes repeated runs fast.
 
-A versioned component such as `python:3.12`, `node:22` or `go:1.26` pins the language version: when it comes first the image tag does it, and when it is layered on as a Feature the Feature's `version` option does. Rust images only publish a major-tag image, so `rust:1.87` and friends are Feature-only and run on whatever image the other components chose. Adding a component, a version or a Feature option means adding one `add_component` line in `bin/dcs`; `dcs --help` prints the same list.
+A versioned component such as `python:3.12`, `node:22` or `go:1.26` pins the language version: when it comes first the image tag does it, and when it is layered on as a Feature the Feature's `version` option does. Rust images only publish a major-tag image, so `rust:1.87` and friends are Feature-only and run on whatever image the other components chose. `cpp` has no Feature to layer, so it is image-only. Adding a component, a version or a Feature option means adding one `add_component` line in `bin/dcs`; `dcs --help` prints the same list.
+
+A component with no command of its own — go, rust, Java, .NET, Ruby, PHP, cpp and the CLI components — leaves the choice to a later component, and `bash` runs when none carries a command. `python`, `node` and the agents, tmux and Vim carry the command they open.
 
 ## Usage
 

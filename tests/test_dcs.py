@@ -96,6 +96,17 @@ class TestDcs(unittest.TestCase):
             # Rust images publish no minor tags, so a versioned Rust component
             # is Feature-only and runs on the base image.
             "rust:1.87": (BASE_IMAGE, {DEV_FEATURES + "rust:1"}, "bash"),
+            "java": (IMAGE_PREFIX + "java:latest", set(), "bash"),
+            "java:21": (IMAGE_PREFIX + "java:21", set(), "bash"),
+            "dotnet": (IMAGE_PREFIX + "dotnet:latest", set(), "bash"),
+            "dotnet:9.0": (IMAGE_PREFIX + "dotnet:9.0", set(), "bash"),
+            "ruby": (IMAGE_PREFIX + "ruby:latest", set(), "bash"),
+            "ruby:3.4": (IMAGE_PREFIX + "ruby:3.4", set(), "bash"),
+            "php": (IMAGE_PREFIX + "php:latest", set(), "bash"),
+            "php:8.4": (IMAGE_PREFIX + "php:8.4", set(), "bash"),
+            # cpp has no Feature, so it is an image-only component.
+            "cpp": (IMAGE_PREFIX + "cpp:latest", set(), "bash"),
+            "playwright": (BASE_IMAGE, {FEATURE_PREFIX + "playwright:0"}, "bash"),
             "opencode": (BASE_IMAGE, {FEATURE_PREFIX + "opencode:0"}, "opencode"),
             "codex": (BASE_IMAGE, {FEATURE_PREFIX + "codex:0"}, "codex"),
             "claude": (BASE_IMAGE, {FEATURE_PREFIX + "claude-code:0"}, "claude"),
@@ -146,7 +157,8 @@ class TestDcs(unittest.TestCase):
         cases = {
             "python,node": (IMAGE_PREFIX + "python:latest", "python"),
             "node,python": (IMAGE_PREFIX + "javascript-node:latest", "node"),
-            "go,opencode": (IMAGE_PREFIX + "go:latest", "bash"),
+            # go carries no command, so opencode is the first one that does.
+            "go,opencode": (IMAGE_PREFIX + "go:latest", "opencode"),
             "opencode,python": (IMAGE_PREFIX + "python:latest", "opencode"),
         }
         for components, (image, command) in cases.items():
@@ -231,8 +243,17 @@ class TestDcs(unittest.TestCase):
             # Layered on another image, the version goes to the Feature.
             "base,node:22": (BASE_IMAGE,
                              {DEV_FEATURES + "node:1": {"version": "22"}}, "node"),
+            # go and rust carry no command, so opencode decides what runs.
             "go:1.26,opencode": (IMAGE_PREFIX + "go:1.26",
-                                 {FEATURE_PREFIX + "opencode:0": {}}, "bash"),
+                                 {FEATURE_PREFIX + "opencode:0": {}}, "opencode"),
+            "base,java:21": (BASE_IMAGE,
+                             {DEV_FEATURES + "java:1": {"version": "21"}}, "bash"),
+            "base,dotnet:9.0": (BASE_IMAGE,
+                                {DEV_FEATURES + "dotnet:2": {"version": "9.0"}}, "bash"),
+            "base,ruby:3.4": (BASE_IMAGE,
+                              {DEV_FEATURES + "ruby:2": {"version": "3.4"}}, "bash"),
+            "base,php:8.4": (BASE_IMAGE,
+                             {DEV_FEATURES + "php:1": {"version": "8.4"}}, "bash"),
         }
         for components, (image, features, command) in cases.items():
             with self.subTest(components=components):
