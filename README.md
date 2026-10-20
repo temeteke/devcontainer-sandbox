@@ -109,7 +109,7 @@ Options come before the component list. Everything after it is the container com
 ```sh
 dcs opencode bash                 # a shell instead of opencode
 dcs opencode opencode --help      # run opencode --help
-dcs python pip install requests   # run pip in the Python sandbox
+dcs python python script.py       # run script.py in the Python sandbox
 ```
 
 So an argument is only passed to the component's default command if you name that command yourself.
@@ -131,7 +131,7 @@ Use `dcs --help` for the wrapper's options.
 
 ## Behavior
 
-- **Disposable:** Every call gets a unique `dcs.session` Docker label; the corresponding container is removed at process exit or on normal signals. Built Docker images/layers remain cached.
+- **Disposable:** Every call gets a unique `dcs.session` Docker label; the corresponding container is removed at process exit or on normal signals. Built Docker images/layers remain cached, but packages installed in the running container (for example with `pip install`) are discarded with it.
 - **Components:** The first positional argument names zero or more built-in components (see [Components](#components)). They are processed in order: a component that carries an image sets it when none is set yet, and its Feature is added otherwise (without duplicates). The first component that carries a command is run.
 - **Command:** dcs options come before the component list, and everything after it is the container command, replacing the component's default command. With no command, `dcs` runs the first component's command, or `bash` when no component carries one; `dcs` on its own appends the `base` component, so it starts a `bash` shell. Pass a component's options by naming its command, as in `dcs opencode opencode --help`.
 - **Workspace:** The current directory is passed to Dev Container CLI as `--workspace-folder`. `dcs` does not override `--mount-workspace-git-root`, so the CLI's default behavior applies (mounting the Git repository root when detected).
