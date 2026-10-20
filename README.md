@@ -38,10 +38,12 @@ make uninstall
 
 ## Components
 
-The first argument names zero or more components, separated by commas. A component is a named entry that may carry a base image, one Dev Container Feature (with options) and the command to run. Components are processed in order: a component that carries an image sets it when no image is set yet, and otherwise its Feature is added. So the first language gives its image and later ones are layered on as Features. The first component that carries a command is run (and `bash` runs when none does). The `base` component stays where it is when named, and is appended otherwise, so `dcs` on its own starts a `bash` shell.
+The first argument names zero or more components, separated by commas. A component is a named entry that may carry a base image, one Dev Container Feature (with options) and the command to run. Components are processed in order: a component that carries an image sets it when no image is set yet, and otherwise its Feature is added. So the first language gives its image and later ones are layered on as Features. The first component that carries a command is run (and `bash` runs when none does). The `base` component stays where it is when named, and is appended otherwise.
+`bash` runs when no component carries a command, so `dcs` on its own starts a `bash` shell.
 
 | Component | Image | Feature (options) | Default command |
 | --- | --- | --- | --- |
+| `base` | `mcr.microsoft.com/devcontainers/base:ubuntu24.04` | — | — |
 | `python` | `mcr.microsoft.com/devcontainers/python:latest` | `ghcr.io/devcontainers/features/python:1` | `python` |
 | `python:3.14` … `python:3.10` | `mcr.microsoft.com/devcontainers/python:<version>` | `ghcr.io/devcontainers/features/python:1` (`version`) | `python` |
 | `node` | `mcr.microsoft.com/devcontainers/javascript-node:latest` | `ghcr.io/devcontainers/features/node:1` | `node` |
@@ -67,13 +69,12 @@ The first argument names zero or more components, separated by commas. A compone
 | `playwright` | — | `ghcr.io/temeteke/devcontainer-features/playwright:0` | — |
 | `gitlab-cli` | — | `ghcr.io/temeteke/devcontainer-features/gitlab-cli:0` | — |
 | `github-cli` | — | `ghcr.io/devcontainers/features/github-cli:1` | — |
-| `base` | `mcr.microsoft.com/devcontainers/base:ubuntu24.04` | — | — |
 
 A language component carries both an image and a Feature: the first language named uses its (prebuilt) image, and any further ones are installed as Features on top. Its Feature is therefore skipped when its image was the one chosen. Layering a language as a Feature means the container is built (installing the Feature) instead of only pulling a prebuilt image; Docker layer caching makes repeated runs fast.
 
 A versioned component such as `python:3.12`, `node:22` or `go:1.26` pins the language version: when it comes first the image tag does it, and when it is layered on as a Feature the Feature's `version` option does. Rust images only publish a major-tag image, so `rust:1.87` and friends are Feature-only and run on whatever image the other components chose. `cpp` has no Feature to layer, so it is image-only. Adding a component, a version or a Feature option means adding one `add_component` line in `bin/dcs`; its command is an argv, so it may carry fixed arguments. `dcs --help` prints the same list.
 
-A component with no command of its own — go, rust, Java, .NET, Ruby, PHP, cpp and the CLI components — leaves the choice to a later component, and `bash` runs when none carries a command. `python`, `node` and the agents, tmux and Vim carry the command they open.
+A component with no command of its own — base, go, rust, Java, .NET, Ruby, PHP, cpp and the CLI components — leaves the choice to a later component, and `bash` runs when none carries a command. `python`, `node` and the agents, tmux and Vim carry the command they open.
 
 ## Usage
 

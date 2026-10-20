@@ -12,9 +12,9 @@ readonly DEFAULT_IMAGE="${IMAGE_PREFIX}base:ubuntu24.04"
 # component that has one. Add a component with one add_component line. A
 # component contributes its image when no image is set yet; otherwise its
 # Feature is added, so a language component can be layered onto another
-# language's image. `base` is appended last unless it is named, so `dcs` alone
-# starts a bash shell. The tmux and Vim Features bind-mount host files (see
-# README).
+# language's image. `base` is appended last unless it is named; bash is the
+# fallback when no component carries a command, so `dcs` alone starts a shell.
+# The tmux and Vim Features bind-mount host files (see README).
 COMPONENT_NAMES=()
 declare -A COMPONENT_IMAGE=()
 declare -A COMPONENT_FEATURE=()
@@ -31,6 +31,7 @@ add_component() {
   COMPONENT_COMMAND[$1]="$5"
 }
 
+add_component base          "$DEFAULT_IMAGE"                        ''                                  ''                  ''
 add_component python        "${IMAGE_PREFIX}python:latest"          "${DEVCONTAINER_FEATURES}/python:1" ''                  python
 add_component "python:3.14" "${IMAGE_PREFIX}python:3.14"            "${DEVCONTAINER_FEATURES}/python:1" '{"version":"3.14"}' python
 add_component "python:3.13" "${IMAGE_PREFIX}python:3.13"            "${DEVCONTAINER_FEATURES}/python:1" '{"version":"3.13"}' python
@@ -77,7 +78,6 @@ add_component vim           ''                                      "$FEATURE_PR
 add_component playwright    ''                                      "$FEATURE_PREFIX/playwright:0"      ''                  ''
 add_component gitlab-cli    ''                                      "$FEATURE_PREFIX/gitlab-cli:0"      ''                  ''
 add_component github-cli    ''                                      "${DEVCONTAINER_FEATURES}/github-cli:1" ''              ''
-add_component base          "$DEFAULT_IMAGE"                        ''                                  ''                  ''
 
 # Strip the known registry prefixes so the help reads as python:latest,
 # python:1 and so on.
