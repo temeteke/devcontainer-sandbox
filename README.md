@@ -60,7 +60,31 @@ dcs --image mcr.microsoft.com/devcontainers/python:3.12 \
 
 `--image` pre-sets the image, so a language named later is added as a Feature.
 `--feature` is repeatable and takes a full Feature reference. The bundled
-Features require a Debian/Ubuntu-compatible image with `apt-get`.
+Features require a Debian/Ubuntu-compatible image with `apt-get`. Long options
+that take a value accept both `--option VALUE` and `--option=VALUE`; short
+options take the value as the next argument.
+
+## Environment
+
+`--env NAME` (or `-e NAME`) forwards a host environment variable to the
+container; `--env NAME=VALUE` sets a literal value. The option is repeatable,
+and a later value for the same name wins. A missing or unexported host variable
+is an error.
+
+```sh
+export ANTHROPIC_API_KEY=...
+dcs -e ANTHROPIC_API_KEY claude
+dcs --env FOO=bar opencode
+```
+
+Options come before the component list. Values are available to the command
+and to lifecycle hooks, and disappear with the container. Prefer the `NAME`
+form for secrets: `NAME=VALUE` appears in shell history, the dcs process
+arguments, and the ephemeral config, while `NAME` is resolved from the host
+environment without writing the value to the config. A literal value
+containing `${...}` may be expanded by the Dev Container CLI; use the `NAME`
+form in that case. Avoid forwarding `PATH` or `HOME` unless intended; they
+replace the container's values and can break the command.
 
 ## Components
 
@@ -124,8 +148,11 @@ documentation for the paths it uses.
 
 The sandbox limits accidental access to files outside the workspace. It is not
 a security boundary for untrusted or malicious code: credentials and state may
-be shared, and the container retains network access. Do not bind-mount the
-Docker socket or host root into the container; `dcs` does not do so itself.
+be shared, and the container retains network access. Environment variables
+passed with `--env` are visible to container processes; the `NAME` form keeps
+the value out of the ephemeral config, but the container is not a security
+boundary. Do not bind-mount the Docker socket or host root into the container;
+`dcs` does not do so itself.
 
 `SIGKILL`, host shutdown or Docker failures can leave a container running. Check
 `docker ps -a --filter label=dcs.session` and remove only stale `dcs` containers.

@@ -116,9 +116,15 @@ Run a command in a new, disposable Dev Container.
 
   --image IMAGE       Base image (counts as an image set before the components)
   --feature REF       Add a Dev Container Feature by full reference (repeatable)
+  -e, --env NAME[=VALUE]
+                      Forward a host environment variable, or set NAME=VALUE
+                      (repeatable; a missing or unexported host variable is an
+                      error)
   -h, --help          Show this help
-Options come before the component list. After the component list, all remaining
-arguments are the container command and its arguments; `--` may be used as an
+Long options that take a value may be written as '--option VALUE' or
+'--option=VALUE'. Short options take the value as the next argument. Options
+come before the component list. After the component list, all remaining
+arguments are the container command and its arguments; '--' may be used as an
 optional separator. A command requires a component; use 'dcs base COMMAND' for
 a command on the plain base image. With no arguments, 'dcs' starts a bash shell.
 
@@ -148,6 +154,7 @@ die() { printf 'dcs: %s\n' "$*" >&2; exit 1; }
 components_arg=''
 image_option=''
 features=()
+env_specs=()
 run_command=()
 components_seen=0
 while (($#)); do
@@ -161,12 +168,26 @@ while (($#)); do
     break
   fi
   case "$1" in
-    --image|--feature)
+    --image|--feature|--env|-e)
       opt="$1"
       (($# >= 2)) || die "missing value for $opt"
       [[ -n "$2" && "$2" != --* ]] || die "missing value for $opt"
-      if [[ "$opt" == --image ]]; then image_option="$2"; else features+=("$2"); fi
+      case "$opt" in
+        --image) image_option="$2" ;;
+        --feature) features+=("$2") ;;
+        --env|-e) env_specs+=("$2") ;;
+      esac
       shift 2 ;;
+    --image=*|--feature=*|--env=*)
+      opt="${1%%=*}"
+      value="${1#*=}"
+      [[ -n "$value" ]] || die "missing value for $opt"
+      case "$opt" in
+        --image) image_option="$value" ;;
+        --feature) features+=("$value") ;;
+        --env) env_specs+=("$value") ;;
+      esac
+      shift ;;
     --) die "missing component list before --" ;;
     -h|--help) usage; exit 0 ;;
     -*) die "unknown option: $1" ;;
@@ -252,6 +273,35 @@ fi
 image="$resolved_image"
 [[ -n "$image" ]] || image="$DEFAULT_IMAGE"
 
+# Resolve --env specs after the component list so errors are reported before
+# any Docker work. NAME forwards the host value through the Dev Container
+# CLI's ${localEnv:NAME} substitution; NAME=VALUE is a literal. printenv
+# checks the environment the CLI will inherit, so a local shell variable with
+# the same name is not mistaken for a host variable.
+declare -A remote_env=()
+remote_env_order=()
+for spec in "${env_specs[@]}"; do
+  if [[ "$spec" == *=* ]]; then
+    name="${spec%%=*}"
+    value="${spec#*=}"
+  else
+    name="$spec"
+    value=''
+  fi
+  [[ "$name" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] ||
+    die "invalid environment variable name: $name"
+  if [[ "$spec" != *=* ]]; then
+    command -v printenv >/dev/null 2>&1 || die 'printenv is required for --env NAME'
+    printenv "$name" >/dev/null 2>&1 ||
+      die "environment variable $name is not set or not exported (use $name=VALUE to pass a literal value)"
+    value="\${localEnv:$name}"
+  fi
+  if [[ -z "${remote_env[$name]+x}" ]]; then
+    remote_env_order+=("$name")
+  fi
+  remote_env[$name]="$value"
+done
+
 if ((${#run_command[@]} == 0)); then
   if ((${#default_command[@]})); then
     run_command=("${default_command[@]}")
@@ -296,19 +346,46 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-# Emit a JSON string. Values are image and Feature references, so escaping \\
-# and " is enough; shell data is never interpolated unescaped.
+# Emit a JSON string. Image and Feature references only need \\ and " escaped,
+# but --env NAME=VALUE values may contain control characters, so escape those
+# as well.
 json_string() {
-  local value="$1"
-  value="${value//\\/\\\\}"
-  value="${value//\"/\\\"}"
-  printf '"%s"' "$value"
+  local value="$1" out='' char code i
+  for ((i = 0; i < ${#value}; i++)); do
+    char="${value:i:1}"
+    case "$char" in
+      '\') out+='\\' ;;
+      '"') out+='\"' ;;
+      $'\n') out+='\n' ;;
+      $'\r') out+='\r' ;;
+      $'\t') out+='\t' ;;
+      $'\b') out+='\b' ;;
+      $'\f') out+='\f' ;;
+      *)
+        printf -v code '%d' "'$char"
+        if ((code < 32)); then
+          printf -v char '\\u%04x' "$code"
+        fi
+        out+="$char"
+        ;;
+    esac
+  done
+  printf '"%s"' "$out"
 }
 
 {
   printf '{\n'
   printf '  "name": "dcs sandbox",\n'
   printf '  "image": %s,\n' "$(json_string "$image")"
+  if ((${#remote_env_order[@]})); then
+    printf '  "remoteEnv": {'
+    separator=''
+    for name in "${remote_env_order[@]}"; do
+      printf '%s%s: %s' "$separator" "$(json_string "$name")" "$(json_string "${remote_env[$name]}")"
+      separator=', '
+    done
+    printf '},\n'
+  fi
   printf '  "features": {'
   separator=''
   if ((${#all_features[@]})); then
@@ -327,14 +404,21 @@ printf 'dcs: creating a disposable container for %s\n' "$workspace" >&2
 
 # Use an explicit external config to ignore any existing workspace .devcontainer.
 # --id-label guarantees concurrent runs never share/reuse the same container.
+# remoteEnv may contain literal --env values, so keep it out of the container
+# metadata label when it is present.
+up_args=(
+  --workspace-folder "$workspace"
+  --config "$tmp/devcontainer.json"
+  --id-label "dcs.session=$session"
+  --no-lockfile
+)
+if ((${#remote_env_order[@]})); then
+  up_args+=(--omit-config-remote-env-from-metadata)
+fi
 # devcontainer up writes its JSON result to stdout. Capture it so it does not
 # pollute the wrapped command's output, and replay it on stderr if startup
 # fails (keeping the CLI's exit status).
-up_output="$(devcontainer up \
-  --workspace-folder "$workspace" \
-  --config "$tmp/devcontainer.json" \
-  --id-label "dcs.session=$session" \
-  --no-lockfile)" || {
+up_output="$(devcontainer up "${up_args[@]}")" || {
   up_status=$?
   if [[ -n "$up_output" ]]; then
     printf '%s\n' "$up_output" >&2

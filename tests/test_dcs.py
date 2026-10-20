@@ -152,6 +152,132 @@ class TestDcs(unittest.TestCase):
         # devcontainer up's JSON must not leak into the wrapped command's stdout.
         self.assertEqual(result.stdout, "exec-ok\n")
 
+    def test_env_forwards_host_variable(self):
+        result = self.run_dcs("--env", "DCS_TEST_TOKEN", "opencode",
+                              DCS_TEST_TOKEN="s3cret")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        config = json.loads(self.config.read_text())
+        self.assertEqual(config["remoteEnv"],
+                         {"DCS_TEST_TOKEN": "${localEnv:DCS_TEST_TOKEN}"})
+        _, up, _ = self.up_and_exec()
+        self.assertIn("--omit-config-remote-env-from-metadata", up)
+
+    def test_env_short_option_and_literal(self):
+        result = self.run_dcs("-e", "DCS_TEST_TOKEN=s3cret", "opencode")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        config = json.loads(self.config.read_text())
+        self.assertEqual(config["remoteEnv"], {"DCS_TEST_TOKEN": "s3cret"})
+        _, up, _ = self.up_and_exec()
+        self.assertIn("--omit-config-remote-env-from-metadata", up)
+
+    def test_env_long_equals_form(self):
+        result = self.run_dcs("--env=DCS_TEST_TOKEN=s3cret", "opencode")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        config = json.loads(self.config.read_text())
+        self.assertEqual(config["remoteEnv"], {"DCS_TEST_TOKEN": "s3cret"})
+
+    def test_env_long_equals_host_form(self):
+        result = self.run_dcs("--env=DCS_TEST_TOKEN", "opencode",
+                              DCS_TEST_TOKEN="s3cret")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        config = json.loads(self.config.read_text())
+        self.assertEqual(config["remoteEnv"],
+                         {"DCS_TEST_TOKEN": "${localEnv:DCS_TEST_TOKEN}"})
+
+    def test_long_equals_forms(self):
+        feature = DEV_FEATURES + "go:1"
+        result = self.run_dcs("--image=example.com/custom:1",
+                              "--feature=" + feature, "--env=FOO=bar",
+                              "base", "bash")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        config = json.loads(self.config.read_text())
+        self.assertEqual(config["image"], "example.com/custom:1")
+        self.assertEqual(config["features"], {feature: {}})
+        self.assertEqual(config["remoteEnv"], {"FOO": "bar"})
+
+    def test_env_multiple_values_and_last_wins(self):
+        result = self.run_dcs("-e", "FOO=one", "--env", "BAR=two",
+                              "--env", "FOO=three", "opencode")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        config = json.loads(self.config.read_text())
+        self.assertEqual(config["remoteEnv"], {"FOO": "three", "BAR": "two"})
+
+    def test_env_allows_empty_literal_and_empty_host_value(self):
+        result = self.run_dcs("--env", "FOO=", "opencode")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        config = json.loads(self.config.read_text())
+        self.assertEqual(config["remoteEnv"], {"FOO": ""})
+
+        self.log.write_text("")
+        result = self.run_dcs("--env", "DCS_TEST_EMPTY", "opencode",
+                              DCS_TEST_EMPTY="")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        config = json.loads(self.config.read_text())
+        self.assertEqual(config["remoteEnv"],
+                         {"DCS_TEST_EMPTY": "${localEnv:DCS_TEST_EMPTY}"})
+
+    def test_env_literal_is_json_escaped(self):
+        value = 'a"b\\c=d\ne\tf\x01g😀é'
+        result = self.run_dcs("--env", "FOO=" + value, "opencode")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        config = json.loads(self.config.read_text())
+        self.assertEqual(config["remoteEnv"]["FOO"], value)
+
+    def test_env_rejects_unset_host_variable(self):
+        result = self.run_dcs("--env", "DCS_TEST_UNSET_9F3C", "opencode")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("DCS_TEST_UNSET_9F3C", result.stderr)
+        self.assertIn("not set", result.stderr)
+        calls = self.calls() if self.log.exists() else []
+        self.assertFalse(any(c[:2] == ["devcontainer", "up"] for c in calls))
+
+    def test_env_rejects_invalid_names(self):
+        for spec in ("1FOO", "=value", "FOO-BAR"):
+            with self.subTest(spec=spec):
+                self.log.write_text("")
+                result = self.run_dcs("--env", spec, "opencode")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("invalid environment variable name", result.stderr)
+                self.assertFalse(any(c[:2] == ["devcontainer", "up"]
+                                     for c in self.calls()))
+
+    def test_env_requires_a_value(self):
+        for args in (("--env",), ("-e",)):
+            with self.subTest(args=args):
+                self.log.write_text("")
+                result = self.run_dcs(*args)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("missing value for", result.stderr)
+                self.assertFalse(any(c[:2] == ["devcontainer", "up"]
+                                     for c in self.calls()))
+
+    def test_long_equals_rejects_empty_values(self):
+        for option in ("--image=", "--feature=", "--env="):
+            with self.subTest(option=option):
+                self.log.write_text("")
+                result = self.run_dcs(option)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("missing value for", result.stderr)
+                self.assertFalse(any(c[:2] == ["devcontainer", "up"]
+                                     for c in self.calls()))
+
+    def test_no_env_leaves_remote_env_absent(self):
+        result = self.run_dcs("opencode")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        config = json.loads(self.config.read_text())
+        self.assertNotIn("remoteEnv", config)
+        _, up, _ = self.up_and_exec()
+        self.assertNotIn("--omit-config-remote-env-from-metadata", up)
+
+    def test_env_without_components_starts_base_shell(self):
+        result = self.run_dcs("--env", "FOO=bar")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        config = json.loads(self.config.read_text())
+        self.assertEqual(config["image"], BASE_IMAGE)
+        self.assertEqual(config["remoteEnv"], {"FOO": "bar"})
+        _, _, exec_ = self.up_and_exec()
+        self.assertEqual(exec_[exec_.index("--") + 1], "bash")
+
     def test_combined_components(self):
         result = self.run_dcs("opencode,python")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -452,6 +578,9 @@ class TestDcs(unittest.TestCase):
     def test_help_lists_components_and_rejects_invalid_option(self):
         help_ = self.run_dcs("--help")
         self.assertEqual(help_.returncode, 0)
+        self.assertEqual(help_.stderr, "")
+        self.assertIn("-e, --env NAME[=VALUE]", help_.stdout)
+        self.assertIn("--option=VALUE", help_.stdout)
         for component in ("python", "python:3.12", "node", "node:22",
                           "go:1.26", "rust:1.87", "opencode", "codex",
                           "claude", "tmux", "vim", "base"):
