@@ -117,9 +117,10 @@ Run a command in a new, disposable Dev Container.
   --image IMAGE       Base image (counts as an image set before the components)
   --feature REF       Add a Dev Container Feature by full reference (repeatable)
   -h, --help          Show this help
-  --                  End of options; treat the rest as COMMAND and its arguments
-
-Options come before the component list.
+Options come before the component list. After the component list, all remaining
+arguments are the container command and its arguments; `--` may be used as an
+optional separator. A command requires a component; use 'dcs base COMMAND' for
+a command on the plain base image. With no arguments, 'dcs' starts a bash shell.
 
 Components (name, what it adds, default command):
 $(component_list)
@@ -166,10 +167,7 @@ while (($#)); do
       [[ -n "$2" && "$2" != --* ]] || die "missing value for $opt"
       if [[ "$opt" == --image ]]; then image_option="$2"; else features+=("$2"); fi
       shift 2 ;;
-    --)
-      shift
-      run_command=("$@")
-      break ;;
+    --) die "missing component list before --" ;;
     -h|--help) usage; exit 0 ;;
     -*) die "unknown option: $1" ;;
     *)

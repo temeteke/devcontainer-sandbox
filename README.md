@@ -42,13 +42,16 @@ dcs python,node               # Python image + Node Feature
 dcs python,node bash          # both languages, in a shell
 dcs python:3.12               # versioned Python image
 dcs node,python:3.12          # Node image + Python 3.12 Feature
+dcs base bash                 # run a shell on the plain base image
 dcs opencode opencode --help  # pass options to opencode
 ```
 
 Options come before the component list. Everything after the list is the
-container command, replacing the default; `--` ends option parsing. `dcs --help`
-is the wrapper's help only before the component list. Name the command yourself
-to pass options to a component's default command.
+container command, replacing the default. A component is required before a
+command; use `dcs base COMMAND` for a command on the plain base image. `dcs`
+alone starts a bash shell. `dcs --help` is the wrapper's help only before the
+component list. Name the command yourself to pass options to a component's
+default command.
 
 ```sh
 dcs --image mcr.microsoft.com/devcontainers/python:3.12 \

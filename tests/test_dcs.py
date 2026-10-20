@@ -296,6 +296,28 @@ class TestDcs(unittest.TestCase):
         _, _, exec_ = self.up_and_exec()
         self.assertEqual(exec_[exec_.index("--") + 1:], ["bash"])
 
+    def test_command_requires_a_component(self):
+        cases = (("--",), ("--", "bash"),
+                 ("--image", "example.com/custom:1", "--", "bash"))
+        for args in cases:
+            with self.subTest(args=args):
+                self.log.write_text("")
+                result = self.run_dcs(*args)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("missing component list before --", result.stderr)
+                self.assertNotIn("dcs base COMMAND", result.stderr)
+                self.assertFalse(any(c[:2] == ["devcontainer", "up"]
+                                     for c in self.calls()))
+
+    def test_base_component_runs_explicit_command(self):
+        result = self.run_dcs("base", "bash")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        config = json.loads(self.config.read_text())
+        self.assertEqual(config["image"], BASE_IMAGE)
+        self.assertEqual(config["features"], {})
+        _, _, exec_ = self.up_and_exec()
+        self.assertEqual(exec_[exec_.index("--") + 1:], ["bash"])
+
     def test_image_and_extra_features_and_command(self):
         result = self.run_dcs("--image", "python:3.12",
                               "--feature", "ghcr.io/devcontainers/features/go:1",
