@@ -126,12 +126,14 @@ $(component_list)
 
 Name zero or more components, separated by commas. They are processed in order:
 a component that carries an image sets it when no image is set yet, and its
-Feature is added otherwise. So 'dcs python,node' uses the Python image and adds
-the Node Feature, and both languages are available. A versioned component such
-as 'python:3.12' or 'node:22' pins the version, using its image when it comes
-first and the Feature's version option otherwise. The first component that
-carries a command is run, and bash runs when none does. base is appended as the
-fallback when it is not named, so 'dcs' alone starts a bash shell.
+Feature is added otherwise. An image-only component such as cpp must come
+before the image is set, because it has no Feature to layer. So
+'dcs python,node' uses the Python image and adds the Node Feature, and both
+languages are available. A versioned component such as 'python:3.12' or
+'node:22' pins the version, using its image when it comes first and the
+Feature's version option otherwise. The first component that carries a command
+is run, and bash runs when none does. base is appended as the fallback when it
+is not named, so 'dcs' alone starts a bash shell.
 
 Everything after the component list is the container command, replacing the
 component's default command (for example, 'dcs opencode bash'). The current
@@ -215,16 +217,25 @@ all_features=()
 for name in "${component_names[@]}"; do
   [[ -z "${seen_components[$name]:-}" ]] || continue
   seen_components[$name]=1
+  contributed=0
   if [[ -n "${COMPONENT_IMAGE[$name]}" && -z "$resolved_image" ]]; then
     # This component provides the image, so its Feature is already included.
     resolved_image="${COMPONENT_IMAGE[$name]}"
+    contributed=1
   elif [[ -n "${COMPONENT_FEATURE[$name]}" ]]; then
     feature="${COMPONENT_FEATURE[$name]}"
+    contributed=1
     if [[ -z "${seen_features[$feature]+x}" ]]; then
       seen_features[$feature]=1
       all_features+=("$feature")
       feature_options[$feature]="${COMPONENT_FEATURE_OPTIONS[$name]}"
     fi
+  fi
+  if ((contributed == 0)) && [[ "$name" != base ]]; then
+    if [[ -n "${COMPONENT_IMAGE[$name]}" ]]; then
+      die "component '$name' adds nothing on image '$(short_ref "$resolved_image")'; it has no Feature to layer"
+    fi
+    die "component '$name' adds nothing: it has no image or Feature"
   fi
   if ((${#default_command[@]} == 0)) && [[ -n "${COMPONENT_COMMAND[$name]}" ]]; then
     read -r -a default_command <<< "${COMPONENT_COMMAND[$name]}"

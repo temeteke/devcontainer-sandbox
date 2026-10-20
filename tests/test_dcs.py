@@ -361,6 +361,30 @@ class TestDcs(unittest.TestCase):
         calls = self.calls() if self.log.exists() else []
         self.assertFalse(any(c[:2] == ["devcontainer", "up"] for c in calls))
 
+    def test_component_that_adds_nothing_is_rejected(self):
+        for args in (("python,cpp",),
+                     ("--image", "example.com/custom:1", "cpp")):
+            with self.subTest(args=args):
+                self.log.write_text("")
+                result = self.run_dcs(*args)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("component 'cpp' adds nothing", result.stderr)
+                self.assertFalse(any(c[:2] == ["devcontainer", "up"]
+                                     for c in self.calls()))
+
+    def test_image_only_component_can_be_first(self):
+        result = self.run_dcs("cpp,python")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        config = json.loads(self.config.read_text())
+        self.assertEqual(config["image"], IMAGE_PREFIX + "cpp:latest")
+        self.assertEqual(set(config["features"]), {DEV_FEATURES + "python:1"})
+
+    def test_base_is_exempt_from_the_no_op_check(self):
+        result = self.run_dcs("python,base")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        config = json.loads(self.config.read_text())
+        self.assertEqual(config["image"], IMAGE_PREFIX + "python:latest")
+
     def test_empty_component_name_is_rejected(self):
         r = self.run_dcs(",opencode")
         self.assertNotEqual(r.returncode, 0)
