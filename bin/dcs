@@ -318,11 +318,21 @@ printf 'dcs: creating a disposable container for %s\n' "$workspace" >&2
 
 # Use an explicit external config to ignore any existing workspace .devcontainer.
 # --id-label guarantees concurrent runs never share/reuse the same container.
-devcontainer up \
+# devcontainer up writes its JSON result to stdout. Capture it so it does not
+# pollute the wrapped command's output, and replay it on stderr if startup
+# fails (keeping the CLI's exit status).
+up_output="$(devcontainer up \
   --workspace-folder "$workspace" \
   --config "$tmp/devcontainer.json" \
   --id-label "dcs.session=$session" \
-  --no-lockfile || die 'devcontainer up failed'
+  --no-lockfile)" || {
+  up_status=$?
+  if [[ -n "$up_output" ]]; then
+    printf '%s\n' "$up_output" >&2
+  fi
+  printf 'dcs: devcontainer up failed\n' >&2
+  exit "$up_status"
+}
 
 # Do not replace this shell: the EXIT trap must remove the container.
 # exec looks the container up from the same dcs.session label.

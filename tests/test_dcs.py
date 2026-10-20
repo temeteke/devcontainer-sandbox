@@ -22,9 +22,11 @@ if argv[0] == 'up':
     pathlib.Path(os.environ['TEST_CONFIG_JSON']).write_text(pathlib.Path(config).read_text())
     if os.environ.get('MOCK_UP_FAIL') == '1':
         print('mock build failed', file=sys.stderr)
+        print(json.dumps({'outcome': 'error', 'message': 'mock build failed'}))
         sys.exit(9)
     print(json.dumps({'outcome':'success','containerId':'test-container'}))
 elif argv[0] == 'exec':
+    print('exec-ok')
     sys.exit(int(os.environ.get('MOCK_EXEC_EXIT', '0')))
 else:
     sys.exit(11)
@@ -143,6 +145,12 @@ class TestDcs(unittest.TestCase):
         config = json.loads(self.config.read_text())
         self.assertEqual(config["image"], BASE_IMAGE)
         self.assertEqual(config["features"], {})
+
+    def test_stdout_contains_only_the_command_output(self):
+        result = self.run_dcs("python")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        # devcontainer up's JSON must not leak into the wrapped command's stdout.
+        self.assertEqual(result.stdout, "exec-ok\n")
 
     def test_combined_components(self):
         result = self.run_dcs("opencode,python")
@@ -331,7 +339,9 @@ class TestDcs(unittest.TestCase):
 
     def test_up_failure_still_cleans_up(self):
         r = self.run_dcs("codex", MOCK_UP_FAIL="1")
-        self.assertNotEqual(r.returncode, 0)
+        self.assertEqual(r.returncode, 9)
+        self.assertEqual(r.stdout, "")
+        self.assertIn('"outcome": "error"', r.stderr)
         self.assertFalse(any(c[:2] == ["devcontainer", "exec"] for c in self.calls()))
         self.assertTrue(any(c[:3] == ["docker", "rm", "-f"] for c in self.calls()))
 
