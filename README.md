@@ -43,6 +43,7 @@ dcs python,node bash          # both languages, in a shell
 dcs python:3.12               # versioned Python image
 dcs node,python:3.12          # Node image + Python 3.12 Feature
 dcs base bash                 # run a shell on the plain base image
+dcs --mount-dir ../shared-lib python,node  # add another host directory
 dcs opencode opencode --help  # pass options to opencode
 ```
 
@@ -85,6 +86,45 @@ environment without writing the value to the config. A literal value
 containing `${...}` may be expanded by the Dev Container CLI; use the `NAME`
 form in that case. Avoid forwarding `PATH` or `HOME` unless intended; they
 replace the container's values and can break the command.
+
+## Additional directories
+
+`--mount-dir DIR[:TARGET]` bind-mounts another host directory into the
+container. The option is repeatable and must come before the component list.
+`DIR` is relative to the current directory or absolute; `~` or a leading `~/`
+is expanded, and the directory must exist. It is mounted at
+`/workspaces/<TARGET>`, where `TARGET` is a single name directly under
+`/workspaces`. Without `TARGET`, the directory's basename is used after
+resolving symlinks.
+
+```sh
+dcs --mount-dir ../shared-lib python,node
+dcs --mount-dir ../a/lib:lib-a --mount-dir ../b/lib:lib-b opencode
+```
+
+The mount is writable; changes are made on the host and survive container
+deletion. There is no read-only mode. The host root and the workspace mount
+source (the Git root when applicable) are refused, as are files and paths that
+do not exist. A `TARGET` that is already used by the workspace or another mount
+is rejected.
+
+In the container, the mount is at `/workspaces/<TARGET>`. When `dcs` runs in a
+Git repository, the workspace is mounted from its Git root. If it is run from a
+subdirectory, the container's workspace folder is
+`/workspaces/<repo>/<subdir>`, so `../<TARGET>` may not resolve to the mount.
+Use `/workspaces/<TARGET>` or adjust the relative path.
+
+`TARGET` cannot contain `/`, `:`, `,`, `"`, `${...}`, or control characters,
+cannot be `.` or `..`, and cannot start or end with whitespace. `DIR` cannot
+contain `,`, `"`, `${...}`, or control characters, and cannot start or end with
+whitespace. Internal spaces are allowed in both. `${...}` is rejected because
+the Dev Container CLI would expand it in the generated config. `DIR` and
+`TARGET` are separated by the last `:`, so a `DIR` containing `:` needs an
+explicit `TARGET`. If the whole `DIR:TARGET` string is also an existing
+directory, `dcs` refuses the ambiguous mount; choose a different `TARGET` or
+add another `:TARGET`. Docker's `-v`, `--volume`, and `--mount` syntax is not
+supported; use this option's `DIR[:TARGET]` form. Each mount widens the
+sandbox; mount only the directories you need.
 
 ## Components
 
@@ -131,7 +171,7 @@ arguments.
 ## Behavior
 
 - **Disposable**: Every call gets a unique `dcs.session` label and its container is removed at exit or on normal signals. Built images remain cached; packages installed at runtime are discarded with the container.
-- **Workspace**: The current directory is passed as `--workspace-folder`; `dcs` leaves the CLI's `--mount-workspace-git-root` default in place.
+- **Workspace**: The current directory is passed as `--workspace-folder`; `dcs` leaves the CLI's `--mount-workspace-git-root` default in place. `--mount-dir` adds writable bind mounts directly under `/workspaces`.
 - **Configuration**: An ephemeral `devcontainer.json` is generated outside the repository; existing `.devcontainer` files are ignored and never modified.
 - **Lifecycle**: `devcontainer up` builds and starts the container and applies Feature lifecycle hooks; `devcontainer exec` runs the command; `docker rm -f` removes only this session's container.
 
@@ -141,18 +181,22 @@ generation. Use Dev Container CLI and Templates for persistent environments.
 ## Host configuration and safety
 
 Some Features bind-mount host files and directories. A bind-mount source must
-exist before container creation; `dcs` does not check host paths, so a missing
-one surfaces as a container-creation error. Mounted paths are writable from the
-container and changes survive container deletion. See each Feature's
-documentation for the paths it uses.
+exist before container creation; `dcs` does not check the paths used by
+Features, so a missing one surfaces as a container-creation error. Mounted
+paths are writable from the container and changes survive container deletion.
+See each Feature's documentation for the paths it uses. `--mount-dir` sources
+are checked before the container starts.
 
 The sandbox limits accidental access to files outside the workspace. It is not
 a security boundary for untrusted or malicious code: credentials and state may
 be shared, and the container retains network access. Environment variables
 passed with `--env` are visible to container processes; the `NAME` form keeps
 the value out of the ephemeral config, but the container is not a security
-boundary. Do not bind-mount the Docker socket or host root into the container;
-`dcs` does not do so itself.
+boundary. `--mount-dir` exposes additional host directories; mount only the
+directories you need. Do not bind-mount the Docker socket or host root into the
+container; `dcs` does not do so itself, and `--mount-dir` refuses the host root.
+It does not detect a Docker socket inside a mounted parent directory such as
+`/var/run` or `/run`; avoid mounting those directories.
 
 `SIGKILL`, host shutdown or Docker failures can leave a container running. Check
 `docker ps -a --filter label=dcs.session` and remove only stale `dcs` containers.

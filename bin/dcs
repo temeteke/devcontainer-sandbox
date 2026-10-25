@@ -120,6 +120,10 @@ Run a command in a new, disposable Dev Container.
                       Forward a host environment variable, or set NAME=VALUE
                       (repeatable; a missing or unexported host variable is an
                       error)
+  --mount-dir DIR[:TARGET]
+                      Bind-mount a host directory at /workspaces/TARGET
+                      (repeatable; TARGET must be a single name directly under
+                      /workspaces and defaults to the directory's basename)
   -h, --help          Show this help
 Long options that take a value may be written as '--option VALUE' or
 '--option=VALUE'. Short options take the value as the next argument. Options
@@ -127,6 +131,17 @@ come before the component list. After the component list, all remaining
 arguments are the container command and its arguments; '--' may be used as an
 optional separator. A command requires a component; use 'dcs base COMMAND' for
 a command on the plain base image. With no arguments, 'dcs' starts a bash shell.
+
+--mount-dir adds host directories as writable bind mounts next to the
+workspace. DIR must be an existing directory; the host root and the workspace
+mount source (the Git root when applicable) are refused. Mounts are writable;
+there is no read-only mode. Use DIR:TARGET to choose the name when two
+directories share a basename. TARGET cannot contain '/', ':', ',', '"',
+'\${...}', or control characters, and cannot start or end with whitespace.
+DIR cannot contain ',', '"', '\${...}', or control characters, and cannot
+start or end with whitespace. If DIR:TARGET is also an existing directory, the
+mount is refused; choose a different TARGET or add another ':TARGET'.
+Docker's -v, --volume, and --mount syntax is not supported.
 
 Components (name, what it adds, default command):
 $(component_list)
@@ -155,6 +170,7 @@ components_arg=''
 image_option=''
 features=()
 env_specs=()
+mount_specs=()
 run_command=()
 components_seen=0
 while (($#)); do
@@ -168,7 +184,7 @@ while (($#)); do
     break
   fi
   case "$1" in
-    --image|--feature|--env|-e)
+    --image|--feature|--env|-e|--mount-dir)
       opt="$1"
       (($# >= 2)) || die "missing value for $opt"
       [[ -n "$2" && "$2" != --* ]] || die "missing value for $opt"
@@ -176,9 +192,10 @@ while (($#)); do
         --image) image_option="$2" ;;
         --feature) features+=("$2") ;;
         --env|-e) env_specs+=("$2") ;;
+        --mount-dir) mount_specs+=("$2") ;;
       esac
       shift 2 ;;
-    --image=*|--feature=*|--env=*)
+    --image=*|--feature=*|--env=*|--mount-dir=*)
       opt="${1%%=*}"
       value="${1#*=}"
       [[ -n "$value" ]] || die "missing value for $opt"
@@ -186,8 +203,11 @@ while (($#)); do
         --image) image_option="$value" ;;
         --feature) features+=("$value") ;;
         --env) env_specs+=("$value") ;;
+        --mount-dir) mount_specs+=("$value") ;;
       esac
       shift ;;
+    --mount|--mount=*|--volume|--volume=*|-v|-v=*)
+      die "$1 is not supported; use --mount-dir DIR[:TARGET]" ;;
     --) die "missing component list before --" ;;
     -h|--help) usage; exit 0 ;;
     -*) die "unknown option: $1" ;;
@@ -310,13 +330,105 @@ if ((${#run_command[@]} == 0)); then
   fi
 fi
 
+# The Dev Container CLI mounts the workspace from its Git root by default.
+# Compute the same target so an additional mount cannot shadow the workspace.
+workspace="$(pwd -P)"
+if ((${#mount_specs[@]})); then
+  command -v realpath >/dev/null 2>&1 || die 'realpath is required for --mount-dir'
+  workspace_root="$workspace"
+  if command -v git >/dev/null 2>&1; then
+    if cdup="$(git -C "$workspace" rev-parse --show-cdup 2>/dev/null)" && [[ -n "$cdup" ]]; then
+      if new_root="$(cd -- "$workspace/$cdup" 2>/dev/null && pwd -P)"; then
+        workspace_root="$new_root"
+      fi
+    fi
+  fi
+  workspace_target="/workspaces/$(basename -- "$workspace_root")"
+fi
+
+# Resolve --mount-dir specs before any Docker work. Each source must be an
+# existing directory; each target is a single name directly under /workspaces.
+# The Dev Container CLI expands ${...} in the generated config and Docker trims
+# the last mount field, so reject those characters before they reach either.
+mount_sources=()
+mount_targets=()
+for spec in "${mount_specs[@]}"; do
+  if [[ "$spec" == *:* ]]; then
+    dir="${spec%:*}"
+    target="${spec##*:}"
+    [[ -n "$dir" ]] || die "missing mount directory in: $spec"
+    [[ -n "$target" ]] || die "missing mount target in: $spec"
+  else
+    dir="$spec"
+    target=''
+  fi
+  if [[ "$dir" == '~' || "$dir" == '~/'* ]]; then
+    [[ -n "${HOME:-}" ]] || die 'HOME is not set'
+    dir="${HOME}${dir#\~}"
+  fi
+  [[ "$dir" != *'${'* ]] ||
+    die "mount source must not contain \${...}: $dir"
+  [[ "$dir" != [[:space:]]* && "$dir" != *[[:space:]] ]] ||
+    die "mount source must not start or end with whitespace: $dir"
+  [[ "$dir" != *[[:cntrl:]]* ]] ||
+    die "mount source must not contain control characters: $dir"
+  [[ "$dir" != *,* && "$dir" != *'"'* ]] ||
+    die "mount source must not contain ',' or '\"': $dir"
+  # DIR:TARGET is also a valid directory name. If both interpretations exist,
+  # refuse instead of silently mounting the wrong directory.
+  if [[ -n "$target" && -d "${dir}:${target}" ]]; then
+    die "ambiguous mount: ${dir}:${target} is also a directory; choose a different TARGET or add another ':TARGET'"
+  fi
+  [[ -d "$dir" ]] || die "mount source does not exist or is not a directory: $dir"
+  resolved_source="$(realpath -e -- "$dir")" || die "unable to resolve mount source: $dir"
+  [[ "$resolved_source" != *'${'* ]] ||
+    die "mount source must not contain \${...}: $resolved_source"
+  [[ "$resolved_source" != [[:space:]]* && "$resolved_source" != *[[:space:]] ]] ||
+    die "mount source must not start or end with whitespace: $resolved_source"
+  [[ "$resolved_source" != *[[:cntrl:]]* ]] ||
+    die "mount source must not contain control characters: $resolved_source"
+  [[ "$resolved_source" != *,* && "$resolved_source" != *'"'* ]] ||
+    die "mount source must not contain ',' or '\"': $resolved_source"
+  [[ "$resolved_source" != / ]] || die 'refusing to mount the host root'
+  [[ "$resolved_source" != "$workspace_root" ]] || die "mount source is the workspace: $resolved_source"
+  if [[ -z "$target" ]]; then
+    target="$(basename -- "$resolved_source")"
+  fi
+  [[ "$target" != *'${'* ]] ||
+    die "mount target must not contain \${...}: $target"
+  [[ "$target" != [[:space:]]* && "$target" != *[[:space:]] ]] ||
+    die "mount target must not start or end with whitespace: $target"
+  [[ "$target" != *[[:cntrl:]]* ]] ||
+    die "mount target must not contain control characters: $target"
+  [[ "$target" != /* ]] ||
+    die "mount target must be relative to /workspaces: $target"
+  [[ "$target" != */* ]] ||
+    die "mount target must be a single name under /workspaces: $target"
+  [[ "$target" != . && "$target" != .. ]] ||
+    die "invalid mount target: $target"
+  [[ "$target" != *:* ]] ||
+    die "mount target must not contain ':': $target"
+  [[ "$target" != *,* && "$target" != *'"'* ]] ||
+    die "mount target must not contain ',' or '\"': $target"
+  full_target="/workspaces/$target"
+  [[ "$full_target" != "$workspace_target" ]] ||
+    die "mount target $full_target is already used by the workspace"
+  if ((${#mount_targets[@]})); then
+    for existing_target in "${mount_targets[@]}"; do
+      [[ "$existing_target" != "$full_target" ]] ||
+        die "mount target $full_target is already used; choose another target"
+    done
+  fi
+  mount_sources+=("$resolved_source")
+  mount_targets+=("$full_target")
+done
+
 for cmd in docker devcontainer; do
   command -v "$cmd" >/dev/null 2>&1 || die "$cmd is required"
 done
 
 docker info >/dev/null 2>&1 || die 'cannot connect to Docker; check the daemon and permissions'
 
-workspace="$(pwd -P)"
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/dcs.XXXXXXXX")" || die 'unable to create temporary directory'
 readonly tmp
 session="$(cat /proc/sys/kernel/random/uuid)" || die 'unable to generate a session ID'
@@ -385,6 +497,16 @@ json_string() {
       separator=', '
     done
     printf '},\n'
+  fi
+  if ((${#mount_sources[@]})); then
+    printf '  "mounts": ['
+    separator=''
+    for ((i = 0; i < ${#mount_sources[@]}; i++)); do
+      printf '%s{"type": "bind", "source": %s, "target": %s}' \
+        "$separator" "$(json_string "${mount_sources[i]}")" "$(json_string "${mount_targets[i]}")"
+      separator=', '
+    done
+    printf '],\n'
   fi
   printf '  "features": {'
   separator=''

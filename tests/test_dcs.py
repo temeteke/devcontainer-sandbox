@@ -2,11 +2,13 @@
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import unittest
 
 DCS = Path(__file__).resolve().parents[1] / "bin" / "dcs"
+GIT = shutil.which("git")
 IMAGE_PREFIX = "mcr.microsoft.com/devcontainers/"
 FEATURE_PREFIX = "ghcr.io/temeteke/devcontainer-features/"
 DEV_FEATURES = "ghcr.io/devcontainers/features/"
@@ -70,10 +72,12 @@ class TestDcs(unittest.TestCase):
         self.env = {**os.environ, "HOME": str(self.home),
                     "PATH": str(mocks) + os.pathsep + os.environ["PATH"],
                     "TEST_LOG": str(self.log),
-                    "TEST_CONFIG_JSON": str(self.config)}
+                    "TEST_CONFIG_JSON": str(self.config),
+                    # Do not discover a repository above the temporary tree.
+                    "GIT_CEILING_DIRECTORIES": str(root)}
 
-    def run_dcs(self, *args, **extra_env):
-        return subprocess.run([str(DCS), *args], cwd=self.workspace,
+    def run_dcs(self, *args, cwd=None, **extra_env):
+        return subprocess.run([str(DCS), *args], cwd=cwd or self.workspace,
                               env={**self.env, **extra_env},
                               capture_output=True, text=True)
 
@@ -85,6 +89,13 @@ class TestDcs(unittest.TestCase):
         up = next(c for c in calls if c[:2] == ["devcontainer", "up"])
         exec_ = next(c for c in calls if c[:2] == ["devcontainer", "exec"])
         return calls, up, exec_
+
+    def generated_mounts(self):
+        return json.loads(self.config.read_text()).get("mounts", [])
+
+    def assert_no_up(self):
+        calls = self.calls() if self.log.exists() else []
+        self.assertFalse(any(c[:2] == ["devcontainer", "up"] for c in calls))
 
     def test_component_defaults_and_workspace(self):
         components = {
@@ -252,7 +263,7 @@ class TestDcs(unittest.TestCase):
                                      for c in self.calls()))
 
     def test_long_equals_rejects_empty_values(self):
-        for option in ("--image=", "--feature=", "--env="):
+        for option in ("--image=", "--feature=", "--env=", "--mount-dir="):
             with self.subTest(option=option):
                 self.log.write_text("")
                 result = self.run_dcs(option)
@@ -277,6 +288,303 @@ class TestDcs(unittest.TestCase):
         self.assertEqual(config["remoteEnv"], {"FOO": "bar"})
         _, _, exec_ = self.up_and_exec()
         self.assertEqual(exec_[exec_.index("--") + 1], "bash")
+
+    def test_mount_dir_default_target(self):
+        shared = Path(self.temp.name) / "shared-lib"
+        shared.mkdir()
+        result = self.run_dcs("--mount-dir", "../shared-lib", "python")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.generated_mounts(), [{
+            "type": "bind",
+            "source": str(shared.resolve()),
+            "target": "/workspaces/shared-lib",
+        }])
+        calls, _, exec_ = self.up_and_exec()
+        self.assertEqual(exec_[exec_.index("--") + 1], "python")
+        self.assertEqual(calls[-1][:3], ["docker", "rm", "-f"])
+
+    def test_mount_dir_explicit_target_and_equals_form(self):
+        shared = Path(self.temp.name) / "shared-lib"
+        shared.mkdir()
+        result = self.run_dcs("--mount-dir", "../shared-lib:lib-a", "python")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.generated_mounts()[0]["target"],
+                         "/workspaces/lib-a")
+
+        self.log.write_text("")
+        result = self.run_dcs("--mount-dir=../shared-lib:lib-b", "python")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.generated_mounts()[0]["target"],
+                         "/workspaces/lib-b")
+
+    def test_mount_dir_multiple_and_order(self):
+        root = Path(self.temp.name)
+        for name in ("shared-lib", "api"):
+            (root / name).mkdir()
+        result = self.run_dcs("--mount-dir", "../shared-lib",
+                              "--mount-dir=../api:api2", "python")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            [(m["source"], m["target"]) for m in self.generated_mounts()],
+            [(str((root / "shared-lib").resolve()), "/workspaces/shared-lib"),
+             (str((root / "api").resolve()), "/workspaces/api2")])
+
+    def test_mount_dir_same_basename_with_explicit_targets(self):
+        root = Path(self.temp.name)
+        (root / "a" / "lib").mkdir(parents=True)
+        (root / "b" / "lib").mkdir(parents=True)
+        result = self.run_dcs("--mount-dir", "../a/lib:lib-a",
+                              "--mount-dir", "../b/lib:lib-b", "python")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([m["target"] for m in self.generated_mounts()],
+                         ["/workspaces/lib-a", "/workspaces/lib-b"])
+
+    def test_mount_dir_expands_tilde_and_resolves_symlinks(self):
+        real = self.home / "real-repo"
+        real.mkdir()
+        (self.home / "alias-repo").symlink_to(real)
+        result = self.run_dcs("--mount-dir", "~/alias-repo", "python")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.generated_mounts(), [{
+            "type": "bind",
+            "source": str(real.resolve()),
+            "target": "/workspaces/real-repo",
+        }])
+
+    def test_mount_dir_source_with_colon_needs_explicit_target(self):
+        colon = Path(self.temp.name) / "a:b"
+        colon.mkdir()
+        result = self.run_dcs("--mount-dir", "../a:b:lib-ab", "python")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.generated_mounts(), [{
+            "type": "bind",
+            "source": str(colon.resolve()),
+            "target": "/workspaces/lib-ab",
+        }])
+
+    def test_mount_dir_rejects_variable_substitution(self):
+        root = Path(self.temp.name)
+        literal = root / "${localWorkspaceFolderBasename}"
+        literal.mkdir()
+        (root / "${localEnv:OLDPWD}").mkdir()
+        (root / "shared-lib").mkdir()
+        (root / "alias").symlink_to(literal)
+        cases = [
+            ("../${localWorkspaceFolderBasename}", "mount source"),
+            ("../${localEnv:OLDPWD}:x", "mount source"),
+            ("../shared-lib:${localWorkspaceFolderBasename}", "mount target"),
+            ("../alias", "mount source"),
+        ]
+        for spec, message in cases:
+            with self.subTest(spec=spec):
+                if self.log.exists():
+                    self.log.write_text("")
+                result = self.run_dcs("--mount-dir", spec, "python")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("${...}", result.stderr)
+                self.assertIn(message, result.stderr)
+                self.assert_no_up()
+
+    def test_mount_dir_rejects_leading_or_trailing_whitespace(self):
+        root = Path(self.temp.name)
+        (root / "shared-lib").mkdir()
+        (root / "space ").mkdir()
+        (root / " space").mkdir()
+        (root / "tab\tname").mkdir()
+        cases = [
+            ("../space ",
+             "mount source must not start or end with whitespace"),
+            ("../ space",
+             "mount target must not start or end with whitespace"),
+            ("../tab\tname",
+             "mount source must not contain control characters"),
+            ("../shared-lib:lib ",
+             "mount target must not start or end with whitespace"),
+            ("../shared-lib: lib",
+             "mount target must not start or end with whitespace"),
+            ("../shared-lib:lib\tx",
+             "mount target must not contain control characters"),
+        ]
+        for spec, message in cases:
+            with self.subTest(spec=spec):
+                if self.log.exists():
+                    self.log.write_text("")
+                result = self.run_dcs("--mount-dir", spec, "python")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
+                self.assert_no_up()
+
+    def test_mount_dir_allows_internal_spaces(self):
+        shared = Path(self.temp.name) / "shared lib"
+        shared.mkdir()
+        result = self.run_dcs("--mount-dir", "../shared lib", "python")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.generated_mounts(), [{
+            "type": "bind",
+            "source": str(shared.resolve()),
+            "target": "/workspaces/shared lib",
+        }])
+
+    def test_mount_dir_allows_leading_space_in_source_with_explicit_target(self):
+        shared = Path(self.temp.name) / " space"
+        shared.mkdir()
+        result = self.run_dcs("--mount-dir", "../ space:safe", "python")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.generated_mounts(), [{
+            "type": "bind",
+            "source": str(shared.resolve()),
+            "target": "/workspaces/safe",
+        }])
+
+    def test_mount_dir_rejects_ambiguous_colon_source(self):
+        root = Path(self.temp.name)
+        (root / "a").mkdir()
+        (root / "a:b").mkdir()
+        result = self.run_dcs("--mount-dir", "../a:b", "python")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("ambiguous mount", result.stderr)
+        self.assert_no_up()
+
+    @unittest.skipUnless(GIT, "git is required")
+    def test_mount_dir_from_git_subdirectory_uses_sibling_target(self):
+        root = Path(self.temp.name)
+        repo = root / "repo"
+        (repo / "sub").mkdir(parents=True)
+        subprocess.run([GIT, "init", "-q", str(repo)], check=True)
+        shared = root / "other" / "shared"
+        shared.mkdir(parents=True)
+        result = self.run_dcs("--mount-dir", "../../other/shared", "python",
+                              cwd=repo / "sub")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.generated_mounts(), [{
+            "type": "bind",
+            "source": str(shared.resolve()),
+            "target": "/workspaces/shared",
+        }])
+        _, _, exec_ = self.up_and_exec()
+        self.assertEqual(exec_[exec_.index("--") + 1], "python")
+
+    def test_mount_dir_absent_by_default(self):
+        result = self.run_dcs("opencode")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        config = json.loads(self.config.read_text())
+        self.assertNotIn("mounts", config)
+
+    def test_mount_dir_without_components_starts_base_shell(self):
+        (Path(self.temp.name) / "shared-lib").mkdir()
+        result = self.run_dcs("--mount-dir", "../shared-lib")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        config = json.loads(self.config.read_text())
+        self.assertEqual(config["image"], BASE_IMAGE)
+        self.assertEqual(self.generated_mounts()[0]["target"],
+                         "/workspaces/shared-lib")
+        _, _, exec_ = self.up_and_exec()
+        self.assertEqual(exec_[exec_.index("--") + 1], "bash")
+
+    def test_mount_dir_rejects_invalid_sources(self):
+        (Path(self.temp.name) / "file.txt").write_text("x")
+        cases = {
+            "../missing": "does not exist",
+            "../file.txt": "not a directory",
+            "/": "host root",
+            ".": "is the workspace",
+        }
+        for spec, message in cases.items():
+            with self.subTest(spec=spec):
+                if self.log.exists():
+                    self.log.write_text("")
+                result = self.run_dcs("--mount-dir", spec, "python")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
+                self.assert_no_up()
+
+    def test_mount_dir_rejects_invalid_targets(self):
+        (Path(self.temp.name) / "shared-lib").mkdir()
+        cases = {
+            "../shared-lib:/workspaces/lib": "must be relative",
+            "../shared-lib:deps/lib": "single name",
+            "../shared-lib:.": "invalid mount target",
+            "../shared-lib:..": "invalid mount target",
+            "../shared-lib:": "missing mount target",
+            "../shared-lib:lib,a": "must not contain",
+        }
+        for spec, message in cases.items():
+            with self.subTest(spec=spec):
+                if self.log.exists():
+                    self.log.write_text("")
+                result = self.run_dcs("--mount-dir", spec, "python")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
+                self.assert_no_up()
+
+    def test_mount_dir_rejects_comma_or_quote_in_source(self):
+        root = Path(self.temp.name)
+        for name in ("a,b", 'a"b'):
+            (root / name).mkdir()
+        for name in ("a,b", 'a"b'):
+            with self.subTest(name=name):
+                if self.log.exists():
+                    self.log.write_text("")
+                result = self.run_dcs("--mount-dir", "../" + name, "python")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("must not contain", result.stderr)
+                self.assert_no_up()
+
+    def test_mount_dir_rejects_duplicate_target(self):
+        root = Path(self.temp.name)
+        (root / "a" / "lib").mkdir(parents=True)
+        (root / "b" / "lib").mkdir(parents=True)
+        result = self.run_dcs("--mount-dir", "../a/lib:shared",
+                              "--mount-dir", "../b/lib:shared", "python")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("already used", result.stderr)
+        self.assert_no_up()
+
+    def test_mount_dir_rejects_workspace_target(self):
+        other = Path(self.temp.name) / "other" / "workspace"
+        other.mkdir(parents=True)
+        for spec in ("../other/workspace",
+                     "../other/workspace:workspace"):
+            with self.subTest(spec=spec):
+                if self.log.exists():
+                    self.log.write_text("")
+                result = self.run_dcs("--mount-dir", spec, "python")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("already used by the workspace", result.stderr)
+                self.assert_no_up()
+
+    @unittest.skipUnless(GIT, "git is required")
+    def test_mount_dir_rejects_git_root_workspace_target(self):
+        root = Path(self.temp.name)
+        repo = root / "repo"
+        (repo / "sub").mkdir(parents=True)
+        subprocess.run([GIT, "init", "-q", str(repo)], check=True)
+        (root / "other" / "repo").mkdir(parents=True)
+        result = self.run_dcs("--mount-dir", "../../other/repo", "python",
+                              cwd=repo / "sub")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("already used by the workspace", result.stderr)
+        self.assert_no_up()
+
+    def test_mount_dir_rejects_empty_value(self):
+        for args in (("--mount-dir",), ("--mount-dir=",)):
+            with self.subTest(args=args):
+                if self.log.exists():
+                    self.log.write_text("")
+                result = self.run_dcs(*args)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("missing value for --mount-dir", result.stderr)
+                self.assert_no_up()
+
+    def test_docker_mount_options_are_rejected(self):
+        for option in ("--mount", "--volume", "-v"):
+            with self.subTest(option=option):
+                if self.log.exists():
+                    self.log.write_text("")
+                result = self.run_dcs(option, "../shared-lib", "python")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("--mount-dir", result.stderr)
+                self.assert_no_up()
 
     def test_combined_components(self):
         result = self.run_dcs("opencode,python")
@@ -580,6 +888,10 @@ class TestDcs(unittest.TestCase):
         self.assertEqual(help_.returncode, 0)
         self.assertEqual(help_.stderr, "")
         self.assertIn("-e, --env NAME[=VALUE]", help_.stdout)
+        self.assertIn("--mount-dir DIR[:TARGET]", help_.stdout)
+        self.assertIn("${...}", help_.stdout)
+        self.assertIn("no read-only mode", help_.stdout)
+        self.assertIn("--volume", help_.stdout)
         self.assertIn("--option=VALUE", help_.stdout)
         for component in ("python", "python:3.12", "node", "node:22",
                           "go:1.26", "rust:1.87", "opencode", "codex",
