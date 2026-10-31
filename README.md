@@ -43,6 +43,7 @@ dcs python,node bash          # both languages, in a shell
 dcs python:3.12               # versioned Python image
 dcs node,python:3.12          # Node image + Python 3.12 Feature
 dcs base bash                 # run a shell on the plain base image
+dcs kubectl,helmfile          # Kubernetes tools (see host requirements)
 dcs --mount-dir ../shared-lib python,node  # add another host directory
 dcs opencode opencode --help  # pass options to opencode
 ```
@@ -149,7 +150,8 @@ command runs (`bash` if none does).
 
 The remaining components are Feature-only (default command in parentheses):
 `opencode` (`opencode`), `codex` (`codex --no-daemon`), `claude` (`claude`),
-`tmux` (`tmux`), `vim` (`vim`), `playwright`, `gitlab-cli`, `github-cli`.
+`tmux` (`tmux`), `vim` (`vim`), `playwright`, `gitlab-cli`, `github-cli`,
+`kubectl`, `helmfile`, `git-config`.
 
 The bare name uses the latest image; a versioned component such as
 `python:3.12` uses the image tag when it comes first and the Feature's `version`
@@ -159,10 +161,32 @@ image-setting component is rejected.
 
 Language images come from `mcr.microsoft.com/devcontainers/<language>:<tag>`
 (`node` uses `javascript-node`); each language except `cpp` also has a matching
-`ghcr.io/devcontainers/features/<language>` Feature. `github-cli` uses
-`ghcr.io/devcontainers/features/github-cli:1`; the other tool Features come
-from `ghcr.io/temeteke/devcontainer-features`. Run `dcs --help` for the exact
-tags, Feature versions and options.
+`ghcr.io/devcontainers/features/<language>` Feature. The tool Features come from
+`ghcr.io/temeteke/devcontainer-features`: the agent, terminal and Kubernetes
+tools, `gitlab-cli`, `github-cli`, and `git-config`. `github-cli` wraps the
+official Feature and persists `~/.config/gh`; `gitlab-cli` and `github-cli`
+also install `git-config` as a dependency. Run `dcs --help` for the exact tags,
+Feature versions and options.
+
+Some of these Features bind-mount host files and need them to exist before the
+container starts:
+
+| Component | Host path |
+| --- | --- |
+| `kubectl` | `~/.kube` |
+| `github-cli` | `~/.config/gh`, `~/.gitconfig` |
+| `gitlab-cli` | `~/.config/glab-cli`, `~/.gitconfig` |
+| `git-config` | `~/.gitconfig` |
+
+Create them first, for example:
+
+```sh
+mkdir -p ~/.kube ~/.config/gh ~/.config/glab-cli
+touch ~/.gitconfig
+```
+
+`dcs` does not check these paths; a missing source surfaces as a container
+creation error.
 
 Adding a component, a version or a Feature option means adding one
 `add_component` line in `bin/dcs`; its command is an argv, so it may carry fixed
@@ -186,6 +210,13 @@ Features, so a missing one surfaces as a container-creation error. Mounted
 paths are writable from the container and changes survive container deletion.
 See each Feature's documentation for the paths it uses. `--mount-dir` sources
 are checked before the container starts.
+
+The host paths listed under Components can contain sensitive data: `~/.kube`
+holds cluster credentials and client certificates, and `~/.config/gh`,
+`~/.config/glab-cli` and `~/.gitconfig` hold tokens or credential
+configuration. `git-config` filters host-specific settings from the generated
+container config, but the mounted host `~/.gitconfig` itself remains writable.
+Enable these components only for projects you trust.
 
 The sandbox limits accidental access to files outside the workspace. It is not
 a security boundary for untrusted or malicious code: credentials and state may

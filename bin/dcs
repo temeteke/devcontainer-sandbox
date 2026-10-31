@@ -77,7 +77,10 @@ add_component tmux          ''                                      "$FEATURE_PR
 add_component vim           ''                                      "$FEATURE_PREFIX/vim:0"             ''                  vim
 add_component playwright    ''                                      "$FEATURE_PREFIX/playwright:0"      ''                  ''
 add_component gitlab-cli    ''                                      "$FEATURE_PREFIX/gitlab-cli:0"      ''                  ''
-add_component github-cli    ''                                      "${DEVCONTAINER_FEATURES}/github-cli:1" ''              ''
+add_component github-cli    ''                                      "$FEATURE_PREFIX/github-cli:0"      ''                  ''
+add_component kubectl       ''                                      "$FEATURE_PREFIX/kubectl:0"         ''                  ''
+add_component helmfile      ''                                      "$FEATURE_PREFIX/helmfile:0"        ''                  ''
+add_component git-config    ''                                      "$FEATURE_PREFIX/git-config:0"      ''                  ''
 
 # Strip the known registry prefixes so the help reads as python:latest,
 # python:1 and so on.

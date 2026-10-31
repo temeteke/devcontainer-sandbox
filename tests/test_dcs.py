@@ -126,7 +126,10 @@ class TestDcs(unittest.TestCase):
             "tmux": (BASE_IMAGE, {FEATURE_PREFIX + "tmux:0"}, "tmux"),
             "vim": (BASE_IMAGE, {FEATURE_PREFIX + "vim:0"}, "vim"),
             "gitlab-cli": (BASE_IMAGE, {FEATURE_PREFIX + "gitlab-cli:0"}, "bash"),
-            "github-cli": (BASE_IMAGE, {DEV_FEATURES + "github-cli:1"}, "bash"),
+            "github-cli": (BASE_IMAGE, {FEATURE_PREFIX + "github-cli:0"}, "bash"),
+            "kubectl": (BASE_IMAGE, {FEATURE_PREFIX + "kubectl:0"}, "bash"),
+            "helmfile": (BASE_IMAGE, {FEATURE_PREFIX + "helmfile:0"}, "bash"),
+            "git-config": (BASE_IMAGE, {FEATURE_PREFIX + "git-config:0"}, "bash"),
         }
         for component, (image, features, command) in components.items():
             with self.subTest(component=component):
@@ -895,7 +898,8 @@ class TestDcs(unittest.TestCase):
         self.assertIn("--option=VALUE", help_.stdout)
         for component in ("python", "python:3.12", "node", "node:22",
                           "go:1.26", "rust:1.87", "opencode", "codex",
-                          "claude", "tmux", "vim", "base"):
+                          "claude", "tmux", "vim", "github-cli", "gitlab-cli",
+                          "kubectl", "helmfile", "git-config", "base"):
             self.assertIn(component, help_.stdout)
         r = self.run_dcs("--bad")
         self.assertNotEqual(r.returncode, 0)
