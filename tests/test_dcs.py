@@ -905,6 +905,110 @@ class TestDcs(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("unknown option", r.stderr)
 
+    def complete(self, cword, *words, **extra_env):
+        result = self.run_dcs("--complete", str(cword), *words, **extra_env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        fields = result.stdout.split("\0")
+        if fields and fields[-1] == "":
+            fields.pop()
+        candidates = fields[0::2]
+        flags = fields[1::2]
+        self.assertEqual(len(candidates), len(flags))
+        self.assertEqual(len(fields) % 2, 0)
+        return candidates, flags
+
+    def test_completion_script_is_valid_bash(self):
+        result = self.run_dcs("--completion", "bash")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("_dcs()", result.stdout)
+        self.assertIn("complete -o bashdefault -o default -F _dcs dcs",
+                      result.stdout)
+        checked = subprocess.run(["bash", "-n"], input=result.stdout,
+                                 capture_output=True, text=True)
+        self.assertEqual(checked.returncode, 0, checked.stderr)
+        self.assertFalse(self.log.exists())
+
+    def test_completion_rejects_unknown_shell(self):
+        r = self.run_dcs("--completion", "zsh")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("only bash is supported", r.stderr)
+        r = self.run_dcs("--completion")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("usage: dcs --completion bash", r.stderr)
+        self.assertFalse(self.log.exists())
+
+    def test_completion_offers_options_and_components(self):
+        candidates, flags = self.complete(1, "dcs", "")
+        for candidate in ("--image", "--feature", "--env", "--mount-dir",
+                          "-e", "-h", "--help", "base", "python",
+                          "python:3.12", "opencode"):
+            self.assertIn(candidate, candidates)
+        for candidate, expected in (("--image", "space"),
+                                    ("base", "nospace")):
+            self.assertEqual(flags[candidates.index(candidate)], expected)
+        self.assertNotIn("nope", candidates)
+
+    def test_completion_filters_options(self):
+        candidates, _ = self.complete(1, "dcs", "--mo")
+        self.assertEqual(candidates, ["--mount-dir"])
+        candidates, _ = self.complete(1, "dcs", "--e")
+        self.assertEqual(candidates, ["--env"])
+        candidates, _ = self.complete(1, "dcs", "--")
+        self.assertIn("--image", candidates)
+        self.assertNotIn("-e", candidates)
+
+    def test_completion_continues_a_comma_list(self):
+        candidates, flags = self.complete(1, "dcs", "python,no")
+        self.assertIn("python,node", candidates)
+        self.assertIn("python,node:22", candidates)
+        self.assertNotIn("python,python", candidates)
+        self.assertNotIn("node", candidates)
+        self.assertEqual(flags, ["nospace"] * len(candidates))
+
+        candidates, _ = self.complete(1, "dcs", "python,")
+        self.assertIn("python,node", candidates)
+        self.assertNotIn("python,python", candidates)
+        self.assertIn("python,python:3.12", candidates)
+
+        candidates, _ = self.complete(1, "dcs", "python,node,")
+        self.assertNotIn("python,node,python", candidates)
+        self.assertNotIn("python,node,node", candidates)
+        self.assertIn("python,node,opencode", candidates)
+
+    def test_completion_stops_at_the_container_command(self):
+        self.assertEqual(self.complete(2, "dcs", "python", ""), ([], []))
+        self.assertEqual(self.complete(2, "dcs", "python", "--"), ([], []))
+        candidates, _ = self.complete(3, "dcs", "--image", "example:1", "")
+        self.assertIn("python", candidates)
+        candidates, _ = self.complete(3, "dcs", "--env", "FOO=bar", "")
+        self.assertIn("python", candidates)
+
+    def test_completion_offers_directories_for_mount_dir(self):
+        (self.workspace / "shared-lib").mkdir()
+        (self.workspace / "shared lib").mkdir()
+        candidates, flags = self.complete(2, "dcs", "--mount-dir", "sh")
+        self.assertCountEqual(candidates, ["shared-lib/", "shared lib/"])
+        self.assertEqual(flags, ["nospace", "nospace"])
+        candidates, _ = self.complete(1, "dcs", "--mount-dir=sh")
+        self.assertCountEqual(candidates, ["--mount-dir=shared-lib/",
+                                           "--mount-dir=shared lib/"])
+        self.assertFalse(self.log.exists())
+
+    def test_completion_offers_exported_environment_names(self):
+        extra = {"DCS_COMPLETION_9F3C": "1"}
+        candidates, flags = self.complete(2, "dcs", "--env",
+                                          "DCS_COMPLETION_9F3C",
+                                          **extra)
+        self.assertEqual(candidates, ["DCS_COMPLETION_9F3C"])
+        self.assertEqual(flags, ["space"])
+        candidates, _ = self.complete(1, "dcs", "--env=DCS_COMPLETION_9F3C",
+                                      **extra)
+        self.assertEqual(candidates, ["--env=DCS_COMPLETION_9F3C"])
+        candidates, _ = self.complete(2, "dcs", "--env",
+                                     "DCS_COMPLETION_9F3C=1", **extra)
+        self.assertEqual(candidates, [])
+        self.assertFalse(self.log.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

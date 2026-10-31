@@ -15,9 +15,9 @@ Each invocation names zero or more components. A component contributes a base im
 From a checkout of this repository:
 
 ```sh
-make install                 # dcs and, if missing, the Dev Container CLI
-make install-dcs             # dcs only
-make uninstall               # remove dcs only
+make install                 # dcs, its bash completion and, if missing, the Dev Container CLI
+make install-dcs             # dcs and its bash completion only
+make uninstall               # remove dcs and its bash completion
 make uninstall-devcontainer  # remove the npm-managed Dev Container CLI
 ```
 
@@ -26,6 +26,11 @@ make uninstall-devcontainer  # remove the npm-managed Dev Container CLI
 `devcontainer` on `PATH` unchanged; otherwise it installs `@devcontainers/cli`
 using npm's current global prefix. Ensure `~/.local/bin` and the npm global bin
 directory are on `PATH`.
+
+The bash completion is installed to
+`~/.local/share/bash-completion/completions/dcs`; set `BASHCOMPLETIONDIR` to
+change that. `bash-completion` loads it when a new shell starts, and
+`make uninstall-dcs` removes it together with the command.
 
 `make uninstall` never removes the Dev Container CLI. Use the same `BINDIR` as
 at install time; remove a CLI installed by another package manager with that
@@ -65,6 +70,31 @@ dcs --image mcr.microsoft.com/devcontainers/python:3.12 \
 Features require a Debian/Ubuntu-compatible image with `apt-get`. Long options
 that take a value accept both `--option VALUE` and `--option=VALUE`; short
 options take the value as the next argument.
+
+## Shell completion
+
+`make install-dcs` installs Bash completion for options and components. The
+function asks the installed `dcs` for candidates, so adding a component to
+`bin/dcs` needs no regeneration.
+
+```sh
+dcs pyth<TAB>                 # python, python:3.12, ...
+dcs python,no<TAB>            # python,node, python,node:22, ...
+dcs --mo<TAB>                 # --mount-dir
+dcs --mount-dir ../sha<TAB>   # matching directories
+dcs --env ANTH<TAB>           # exported host variable names
+```
+
+After the component list, completion falls back to the shell's normal command
+and file completion, because everything from there belongs to the container
+command. Completion does not expand `~` in `--mount-dir` values and does not
+suggest `--image` or `--feature` values.
+
+Without `bash-completion`, load the same function from your shell startup file:
+
+```sh
+eval "$(dcs --completion bash)"
+```
 
 ## Environment
 
