@@ -1,11 +1,12 @@
 .DEFAULT_GOAL := help
 
 BINDIR ?= $(HOME)/.local/bin
+BASHCOMPLETIONDIR ?= $(HOME)/.local/share/bash-completion/completions
 
 .PHONY: help install install-dcs install-devcontainer uninstall uninstall-dcs uninstall-devcontainer test
 
 help:
-	@printf 'Targets:\n  make install                 Install dcs and, if missing, Dev Container CLI via npm\n  make install-dcs             Install only dcs\n  make install-devcontainer    Install Dev Container CLI if missing\n  make uninstall               Remove dcs only\n  make uninstall-dcs           Remove only dcs\n  make uninstall-devcontainer  Remove npm-managed Dev Container CLI only\n  make test                    Run offline tests\n'
+	@printf 'Targets:\n  make install                 Install dcs, its bash completion and, if missing, Dev Container CLI via npm\n  make install-dcs             Install only dcs and its bash completion\n  make install-devcontainer    Install Dev Container CLI if missing\n  make uninstall               Remove dcs and its bash completion\n  make uninstall-dcs           Remove only dcs and its bash completion\n  make uninstall-devcontainer  Remove npm-managed Dev Container CLI only\n  make test                    Run offline tests\n'
 
 install: install-devcontainer install-dcs
 
@@ -27,13 +28,17 @@ install-devcontainer:
 	fi
 
 install-dcs:
-	install -Dm755 bin/dcs "$(BINDIR)/dcs"
+	@install -Dm755 bin/dcs "$(BINDIR)/dcs"
+	@mkdir -p -- "$(BASHCOMPLETIONDIR)"
+	@bin/dcs --completion bash > "$(BASHCOMPLETIONDIR)/dcs.tmp" && \
+		chmod 644 "$(BASHCOMPLETIONDIR)/dcs.tmp" && \
+		mv -f -- "$(BASHCOMPLETIONDIR)/dcs.tmp" "$(BASHCOMPLETIONDIR)/dcs"
 
 uninstall: uninstall-dcs
 
 uninstall-dcs:
-	@rm -f -- "$(BINDIR)/dcs"
-	@printf 'Removed dcs from %s (Dev Container CLI was not changed)\n' "$(BINDIR)"
+	@rm -f -- "$(BINDIR)/dcs" "$(BASHCOMPLETIONDIR)/dcs"
+	@printf 'Removed dcs and its bash completion (Dev Container CLI was not changed)\n'
 
 uninstall-devcontainer:
 	@if ! command -v npm >/dev/null 2>&1; then \
@@ -44,4 +49,5 @@ uninstall-devcontainer:
 
 test:
 	bash -n bin/dcs
+	bin/dcs --completion bash | bash -n
 	python3 -m unittest discover -s tests -v

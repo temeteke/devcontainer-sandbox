@@ -12,15 +12,17 @@ readonly DEFAULT_IMAGE="${IMAGE_PREFIX}base:ubuntu24.04"
 # component that has one. Add a component with one add_component line. A
 # component contributes its image when no image is set yet; otherwise its
 # Feature is added, so a language component can be layered onto another
-# language's image. `base` is appended last unless it is named, so `dcs` alone
-# starts a bash shell. The tmux and Vim Features bind-mount host files (see
-# README).
+# language's image. `base` is appended last unless it is named; bash is the
+# fallback when no component carries a command, so `dcs` alone starts a shell.
+# The tmux and Vim Features bind-mount host files (see README).
 COMPONENT_NAMES=()
 declare -A COMPONENT_IMAGE=()
 declare -A COMPONENT_FEATURE=()
 declare -A COMPONENT_FEATURE_OPTIONS=()
 declare -A COMPONENT_COMMAND=()
 # add_component NAME IMAGE FEATURE [FEATURE_OPTIONS] COMMAND
+# COMMAND is an argv: whitespace separates its arguments and it is never
+# evaluated by a shell.
 add_component() {
   COMPONENT_NAMES+=("$1")
   COMPONENT_IMAGE[$1]="$2"
@@ -29,6 +31,7 @@ add_component() {
   COMPONENT_COMMAND[$1]="$5"
 }
 
+add_component base          "$DEFAULT_IMAGE"                        ''                                  ''                  ''
 add_component python        "${IMAGE_PREFIX}python:latest"          "${DEVCONTAINER_FEATURES}/python:1" ''                  python
 add_component "python:3.14" "${IMAGE_PREFIX}python:3.14"            "${DEVCONTAINER_FEATURES}/python:1" '{"version":"3.14"}' python
 add_component "python:3.13" "${IMAGE_PREFIX}python:3.13"            "${DEVCONTAINER_FEATURES}/python:1" '{"version":"3.13"}' python
@@ -68,15 +71,158 @@ add_component "php:8.3"     "${IMAGE_PREFIX}php:8.3"                "${DEVCONTAI
 # There is no cpp Feature, so cpp is an image-only component.
 add_component cpp           "${IMAGE_PREFIX}cpp:latest"             ''                                  ''                  ''
 add_component opencode      ''                                      "$FEATURE_PREFIX/opencode:0"        ''                  opencode
-add_component dsh           ''                                      "$FEATURE_PREFIX/dsh:0"             ''                  dsh
-add_component codex         ''                                      "$FEATURE_PREFIX/codex:0"           ''                  codex
+add_component dsh           ''                                      "$FEATURE_PREFIX/dsh:0"            ''                  dsh
+add_component codex         ''                                      "$FEATURE_PREFIX/codex:0"           ''                  'codex --no-daemon'
 add_component claude        ''                                      "$FEATURE_PREFIX/claude-code:0"     ''                  claude
 add_component tmux          ''                                      "$FEATURE_PREFIX/tmux:0"            ''                  tmux
 add_component vim           ''                                      "$FEATURE_PREFIX/vim:0"             ''                  vim
 add_component playwright    ''                                      "$FEATURE_PREFIX/playwright:0"      ''                  ''
 add_component gitlab-cli    ''                                      "$FEATURE_PREFIX/gitlab-cli:0"      ''                  ''
-add_component github-cli    ''                                      "${DEVCONTAINER_FEATURES}/github-cli:1" ''              ''
-add_component base          "$DEFAULT_IMAGE"                        ''                                  ''                  ''
+add_component github-cli    ''                                      "$FEATURE_PREFIX/github-cli:0"      ''                  ''
+add_component kubectl       ''                                      "$FEATURE_PREFIX/kubectl:0"         ''                  ''
+add_component helmfile      ''                                      "$FEATURE_PREFIX/helmfile:0"        ''                  ''
+add_component git-config    ''                                      "$FEATURE_PREFIX/git-config:0"      ''                  ''
+
+# The completion helpers read the caller's `candidates` and `no_space` arrays
+# through Bash's dynamic scope.
+completion_add() {
+  candidates+=("$1")
+  no_space+=("${2:-0}")
+}
+
+completion_emit() {
+  local i flag
+  for ((i = 0; i < ${#candidates[@]}; i++)); do
+    if [[ "${no_space[i]:-0}" == 1 ]]; then flag=nospace; else flag=space; fi
+    printf '%s\0%s\0' "${candidates[i]}" "$flag"
+  done
+}
+
+# Print the bash completion function. It is deliberately small: every TAB asks
+# the installed dcs for candidates, so the component table above stays the only
+# list to maintain.
+completion_script() {
+  cat <<'COMPLETION'
+_dcs() {
+  local candidate flag all_nospace=1
+  COMPREPLY=()
+  while IFS= read -r -d '' candidate && IFS= read -r -d '' flag; do
+    COMPREPLY+=("$candidate")
+    [[ "$flag" == nospace ]] || all_nospace=0
+  done < <(command dcs --complete "$COMP_CWORD" "${COMP_WORDS[@]}" 2>/dev/null)
+  if ((${#COMPREPLY[@]})) && ((all_nospace)); then
+    compopt -o nospace 2>/dev/null || true
+  fi
+}
+complete -o bashdefault -o default -F _dcs dcs
+COMPLETION
+}
+
+# Complete the word at CWORD. Options come before the component list; after the
+# list (or after --) everything belongs to the container command, so no
+# candidates are returned and Bash falls back to its default completion.
+completion_candidates() {
+  (($# >= 2)) || die 'usage: dcs --complete CWORD WORD...'
+  local cword="$1"
+  shift
+  [[ "$cword" =~ ^[0-9]+$ ]] || die "invalid completion index: $cword"
+  local -a words=("$@")
+  local -a candidates=()
+  local -a no_space=()
+  local -a used=()
+  local cur="${words[cword]:-}"
+  local prev=''
+  if ((cword > 0)); then
+    prev="${words[cword-1]:-}"
+  fi
+  local i=1 w opt name dir value base frag conflict flag
+  local -a options=(--image --feature --env --mount-dir -e -h --help)
+
+  # Walk the completed words to find out whether the component list is still
+  # open. Any non-option word there is the component list; the current word is
+  # then the first word of the container command.
+  while ((i < cword)); do
+    w="${words[i]}"
+    case "$w" in
+      --image|--feature|--env|-e|--mount-dir) i=$((i + 2)) ;;
+      --image=*|--feature=*|--env=*|--mount-dir=*) i=$((i + 1)) ;;
+      --) return 0 ;;
+      -*) i=$((i + 1)) ;;
+      *) return 0 ;;
+    esac
+  done
+
+  local handled=0
+  case "$prev" in
+    --image|--feature) handled=1 ;;
+    --env|-e)
+      handled=1
+      if [[ "$cur" != *=* ]]; then
+        while IFS= read -r name; do
+          [[ -n "$name" ]] && completion_add "$name"
+        done < <(compgen -e -- "$cur" || true)
+      fi ;;
+    --mount-dir)
+      handled=1
+      while IFS= read -r dir; do
+        [[ -n "$dir" ]] && completion_add "${dir}/" 1
+      done < <(compgen -d -- "$cur" || true) ;;
+  esac
+
+  if ((handled == 0)); then
+    case "$cur" in
+      --mount-dir=*)
+        value="${cur#*=}"
+        while IFS= read -r dir; do
+          [[ -n "$dir" ]] && completion_add "--mount-dir=${dir}/" 1
+        done < <(compgen -d -- "$value" || true) ;;
+      --env=*)
+        value="${cur#*=}"
+        if [[ "$value" != *=* ]]; then
+          while IFS= read -r name; do
+            [[ -n "$name" ]] && completion_add "--env=${name}"
+          done < <(compgen -e -- "$value" || true)
+        fi ;;
+      --image=*|--feature=*) ;;
+      -*)
+        for opt in "${options[@]}"; do
+          if [[ "$opt" == "$cur"* ]]; then
+            completion_add "$opt"
+          fi
+        done ;;
+      *)
+        if [[ -z "$cur" ]]; then
+          for opt in "${options[@]}"; do
+            completion_add "$opt"
+          done
+        fi
+        if [[ "$cur" == *,* ]]; then
+          # Complete only the segment after the last comma, but replace the
+          # whole word. Components already named earlier are not offered again.
+          base="${cur%,*},"
+          frag="${cur##*,}"
+          IFS=',' read -r -a used <<< "${cur%,*}"
+          for name in "${COMPONENT_NAMES[@]}"; do
+            conflict=0
+            for w in "${used[@]}"; do
+              [[ "$w" == "$name" ]] && { conflict=1; break; }
+            done
+            if ((conflict == 0)) && [[ "$name" == "$frag"* ]]; then
+              completion_add "${base}${name}" 1
+            fi
+          done
+        else
+          for name in "${COMPONENT_NAMES[@]}"; do
+            if [[ "$name" == "$cur"* ]]; then
+              completion_add "$name" 1
+            fi
+          done
+        fi ;;
+    esac
+  fi
+
+  completion_emit
+}
 
 # Strip the known registry prefixes so the help reads as python:latest,
 # python:1 and so on.
@@ -115,62 +261,113 @@ Run a command in a new, disposable Dev Container.
 
   --image IMAGE       Base image (counts as an image set before the components)
   --feature REF       Add a Dev Container Feature by full reference (repeatable)
+  -e, --env NAME[=VALUE]
+                      Forward a host environment variable, or set NAME=VALUE
+                      (repeatable; a missing or unexported host variable is an
+                      error)
+  --mount-dir DIR[:TARGET]
+                      Bind-mount a host directory at /workspaces/TARGET
+                      (repeatable; TARGET must be a single name directly under
+                      /workspaces and defaults to the directory's basename)
   -h, --help          Show this help
-  --                  End of options; treat the rest as COMMAND and its arguments
+Long options that take a value may be written as '--option VALUE' or
+'--option=VALUE'. Short options take the value as the next argument. Options
+come before the component list. After the component list, all remaining
+arguments are the container command and its arguments; '--' may be used as an
+optional separator. A command requires a component; use 'dcs base COMMAND' for
+a command on the plain base image. With no arguments, 'dcs' starts a bash shell.
 
-Options come before the component list.
+--mount-dir adds host directories as writable bind mounts next to the
+workspace. DIR must be an existing directory; the host root and the workspace
+mount source (the Git root when applicable) are refused. Mounts are writable;
+there is no read-only mode. Use DIR:TARGET to choose the name when two
+directories share a basename. TARGET cannot contain '/', ':', ',', '"',
+'\${...}', or control characters, and cannot start or end with whitespace.
+DIR cannot contain ',', '"', '\${...}', or control characters, and cannot
+start or end with whitespace. If DIR:TARGET is also an existing directory, the
+mount is refused; choose a different TARGET or add another ':TARGET'.
+Docker's -v, --volume, and --mount syntax is not supported.
 
 Components (name, what it adds, default command):
 $(component_list)
 
 Name zero or more components, separated by commas. They are processed in order:
 a component that carries an image sets it when no image is set yet, and its
-Feature is added otherwise. So 'dcs python,node' uses the Python image and adds
-the Node Feature, and both languages are available. A versioned component such
-as 'python:3.12' or 'node:22' pins the version, using its image when it comes
-first and the Feature's version option otherwise. The first component that
-carries a command is run, and bash runs when none does. base is appended as the
-fallback when it is not named, so 'dcs' alone starts a bash shell.
+Feature is added otherwise. An image-only component such as cpp must come
+before the image is set, because it has no Feature to layer. So
+'dcs python,node' uses the Python image and adds the Node Feature, and both
+languages are available. A versioned component such as 'python:3.12' or
+'node:22' pins the version, using its image when it comes first and the
+Feature's version option otherwise. The first component that carries a command
+is run, and bash runs when none does. base is appended as the fallback when it
+is not named, so 'dcs' alone starts a bash shell.
 
-Everything after the component list is the container command. A command name
-runs instead of the default command (for example, 'dcs opencode bash'). Options
-are passed to the default command instead (for example, 'dcs opencode --help'
-runs 'opencode --help'). The current working directory is passed to Dev
-Container CLI as the workspace folder; the container is deleted on exit while
-built images may remain cached.
+Everything after the component list is the container command, replacing the
+component's default command (for example, 'dcs opencode bash'). The current
+working directory is passed to Dev Container CLI as the workspace folder; the
+container is deleted on exit while built images may remain cached.
 HELP
 }
 
 die() { printf 'dcs: %s\n' "$*" >&2; exit 1; }
 
+# Utility modes. They must run before the component list is parsed and before
+# any Docker work, and only when they are the very first argument.
+case "${1:-}" in
+  --completion)
+    (($# == 2)) || die 'usage: dcs --completion bash'
+    [[ "$2" == bash ]] || die "unsupported shell: $2 (only bash is supported)"
+    completion_script
+    exit 0 ;;
+  --complete)
+    shift
+    completion_candidates "$@"
+    exit 0 ;;
+esac
+
 components_arg=''
 image_option=''
 features=()
+env_specs=()
+mount_specs=()
 run_command=()
 components_seen=0
-append_default=0
 while (($#)); do
-  # Options come before the component list. Everything after the component
-  # list belongs to the container command.
+  # Options come before the component list. Everything after it is the
+  # container command, replacing the component's default command.
   if ((components_seen == 1)); then
-    case "$1" in
-      --) shift ;;
-      -*) append_default=1 ;;
-    esac
+    if [[ "$1" == -- ]]; then
+      shift
+    fi
     run_command=("$@")
     break
   fi
   case "$1" in
-    --image|--feature)
+    --image|--feature|--env|-e|--mount-dir)
       opt="$1"
       (($# >= 2)) || die "missing value for $opt"
       [[ -n "$2" && "$2" != --* ]] || die "missing value for $opt"
-      if [[ "$opt" == --image ]]; then image_option="$2"; else features+=("$2"); fi
+      case "$opt" in
+        --image) image_option="$2" ;;
+        --feature) features+=("$2") ;;
+        --env|-e) env_specs+=("$2") ;;
+        --mount-dir) mount_specs+=("$2") ;;
+      esac
       shift 2 ;;
-    --)
-      shift
-      run_command=("$@")
-      break ;;
+    --image=*|--feature=*|--env=*|--mount-dir=*)
+      opt="${1%%=*}"
+      value="${1#*=}"
+      [[ -n "$value" ]] || die "missing value for $opt"
+      case "$opt" in
+        --image) image_option="$value" ;;
+        --feature) features+=("$value") ;;
+        --env) env_specs+=("$value") ;;
+        --mount-dir) mount_specs+=("$value") ;;
+      esac
+      shift ;;
+    --mount|--mount=*|--volume|--volume=*|-v|-v=*)
+      die "$1 is not supported; use --mount-dir DIR[:TARGET]" ;;
+    --) die "missing component list before --" ;;
     -h|--help) usage; exit 0 ;;
     -*) die "unknown option: $1" ;;
     *)
@@ -210,7 +407,7 @@ component_names=("${selected[@]}")
 # Feature is added (so a language can be layered onto another language's
 # image). --image counts as an already-set image.
 resolved_image="$image_option"
-default_command=''
+default_command=()
 declare -A seen_components=()
 declare -A seen_features=()
 declare -A feature_options=()
@@ -218,19 +415,28 @@ all_features=()
 for name in "${component_names[@]}"; do
   [[ -z "${seen_components[$name]:-}" ]] || continue
   seen_components[$name]=1
+  contributed=0
   if [[ -n "${COMPONENT_IMAGE[$name]}" && -z "$resolved_image" ]]; then
     # This component provides the image, so its Feature is already included.
     resolved_image="${COMPONENT_IMAGE[$name]}"
+    contributed=1
   elif [[ -n "${COMPONENT_FEATURE[$name]}" ]]; then
     feature="${COMPONENT_FEATURE[$name]}"
+    contributed=1
     if [[ -z "${seen_features[$feature]+x}" ]]; then
       seen_features[$feature]=1
       all_features+=("$feature")
       feature_options[$feature]="${COMPONENT_FEATURE_OPTIONS[$name]}"
     fi
   fi
-  if [[ -z "$default_command" && -n "${COMPONENT_COMMAND[$name]}" ]]; then
-    default_command="${COMPONENT_COMMAND[$name]}"
+  if ((contributed == 0)) && [[ "$name" != base ]]; then
+    if [[ -n "${COMPONENT_IMAGE[$name]}" ]]; then
+      die "component '$name' adds nothing on image '$(short_ref "$resolved_image")'; it has no Feature to layer"
+    fi
+    die "component '$name' adds nothing: it has no image or Feature"
+  fi
+  if ((${#default_command[@]} == 0)) && [[ -n "${COMPONENT_COMMAND[$name]}" ]]; then
+    read -r -a default_command <<< "${COMPONENT_COMMAND[$name]}"
   fi
 done
 if ((${#features[@]})); then
@@ -246,16 +452,135 @@ fi
 image="$resolved_image"
 [[ -n "$image" ]] || image="$DEFAULT_IMAGE"
 
+# Resolve --env specs after the component list so errors are reported before
+# any Docker work. NAME forwards the host value through the Dev Container
+# CLI's ${localEnv:NAME} substitution; NAME=VALUE is a literal. printenv
+# checks the environment the CLI will inherit, so a local shell variable with
+# the same name is not mistaken for a host variable.
+declare -A remote_env=()
+remote_env_order=()
+for spec in "${env_specs[@]}"; do
+  if [[ "$spec" == *=* ]]; then
+    name="${spec%%=*}"
+    value="${spec#*=}"
+  else
+    name="$spec"
+    value=''
+  fi
+  [[ "$name" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] ||
+    die "invalid environment variable name: $name"
+  if [[ "$spec" != *=* ]]; then
+    command -v printenv >/dev/null 2>&1 || die 'printenv is required for --env NAME'
+    printenv "$name" >/dev/null 2>&1 ||
+      die "environment variable $name is not set or not exported (use $name=VALUE to pass a literal value)"
+    value="\${localEnv:$name}"
+  fi
+  if [[ -z "${remote_env[$name]+x}" ]]; then
+    remote_env_order+=("$name")
+  fi
+  remote_env[$name]="$value"
+done
+
 if ((${#run_command[@]} == 0)); then
-  if [[ -n "$default_command" ]]; then
-    run_command=("$default_command")
+  if ((${#default_command[@]})); then
+    run_command=("${default_command[@]}")
   else
     run_command=(bash)
   fi
-elif ((append_default)) && [[ -n "$default_command" ]]; then
-  # Options given after the component list are passed to the default command.
-  run_command=("$default_command" "${run_command[@]}")
 fi
+
+# The Dev Container CLI mounts the workspace from its Git root by default.
+# Compute the same target so an additional mount cannot shadow the workspace.
+workspace="$(pwd -P)"
+if ((${#mount_specs[@]})); then
+  command -v realpath >/dev/null 2>&1 || die 'realpath is required for --mount-dir'
+  workspace_root="$workspace"
+  if command -v git >/dev/null 2>&1; then
+    if cdup="$(git -C "$workspace" rev-parse --show-cdup 2>/dev/null)" && [[ -n "$cdup" ]]; then
+      if new_root="$(cd -- "$workspace/$cdup" 2>/dev/null && pwd -P)"; then
+        workspace_root="$new_root"
+      fi
+    fi
+  fi
+  workspace_target="/workspaces/$(basename -- "$workspace_root")"
+fi
+
+# Resolve --mount-dir specs before any Docker work. Each source must be an
+# existing directory; each target is a single name directly under /workspaces.
+# The Dev Container CLI expands ${...} in the generated config and Docker trims
+# the last mount field, so reject those characters before they reach either.
+mount_sources=()
+mount_targets=()
+for spec in "${mount_specs[@]}"; do
+  if [[ "$spec" == *:* ]]; then
+    dir="${spec%:*}"
+    target="${spec##*:}"
+    [[ -n "$dir" ]] || die "missing mount directory in: $spec"
+    [[ -n "$target" ]] || die "missing mount target in: $spec"
+  else
+    dir="$spec"
+    target=''
+  fi
+  if [[ "$dir" == '~' || "$dir" == '~/'* ]]; then
+    [[ -n "${HOME:-}" ]] || die 'HOME is not set'
+    dir="${HOME}${dir#\~}"
+  fi
+  [[ "$dir" != *'${'* ]] ||
+    die "mount source must not contain \${...}: $dir"
+  [[ "$dir" != [[:space:]]* && "$dir" != *[[:space:]] ]] ||
+    die "mount source must not start or end with whitespace: $dir"
+  [[ "$dir" != *[[:cntrl:]]* ]] ||
+    die "mount source must not contain control characters: $dir"
+  [[ "$dir" != *,* && "$dir" != *'"'* ]] ||
+    die "mount source must not contain ',' or '\"': $dir"
+  # DIR:TARGET is also a valid directory name. If both interpretations exist,
+  # refuse instead of silently mounting the wrong directory.
+  if [[ -n "$target" && -d "${dir}:${target}" ]]; then
+    die "ambiguous mount: ${dir}:${target} is also a directory; choose a different TARGET or add another ':TARGET'"
+  fi
+  [[ -d "$dir" ]] || die "mount source does not exist or is not a directory: $dir"
+  resolved_source="$(realpath -e -- "$dir")" || die "unable to resolve mount source: $dir"
+  [[ "$resolved_source" != *'${'* ]] ||
+    die "mount source must not contain \${...}: $resolved_source"
+  [[ "$resolved_source" != [[:space:]]* && "$resolved_source" != *[[:space:]] ]] ||
+    die "mount source must not start or end with whitespace: $resolved_source"
+  [[ "$resolved_source" != *[[:cntrl:]]* ]] ||
+    die "mount source must not contain control characters: $resolved_source"
+  [[ "$resolved_source" != *,* && "$resolved_source" != *'"'* ]] ||
+    die "mount source must not contain ',' or '\"': $resolved_source"
+  [[ "$resolved_source" != / ]] || die 'refusing to mount the host root'
+  [[ "$resolved_source" != "$workspace_root" ]] || die "mount source is the workspace: $resolved_source"
+  if [[ -z "$target" ]]; then
+    target="$(basename -- "$resolved_source")"
+  fi
+  [[ "$target" != *'${'* ]] ||
+    die "mount target must not contain \${...}: $target"
+  [[ "$target" != [[:space:]]* && "$target" != *[[:space:]] ]] ||
+    die "mount target must not start or end with whitespace: $target"
+  [[ "$target" != *[[:cntrl:]]* ]] ||
+    die "mount target must not contain control characters: $target"
+  [[ "$target" != /* ]] ||
+    die "mount target must be relative to /workspaces: $target"
+  [[ "$target" != */* ]] ||
+    die "mount target must be a single name under /workspaces: $target"
+  [[ "$target" != . && "$target" != .. ]] ||
+    die "invalid mount target: $target"
+  [[ "$target" != *:* ]] ||
+    die "mount target must not contain ':': $target"
+  [[ "$target" != *,* && "$target" != *'"'* ]] ||
+    die "mount target must not contain ',' or '\"': $target"
+  full_target="/workspaces/$target"
+  [[ "$full_target" != "$workspace_target" ]] ||
+    die "mount target $full_target is already used by the workspace"
+  if ((${#mount_targets[@]})); then
+    for existing_target in "${mount_targets[@]}"; do
+      [[ "$existing_target" != "$full_target" ]] ||
+        die "mount target $full_target is already used; choose another target"
+    done
+  fi
+  mount_sources+=("$resolved_source")
+  mount_targets+=("$full_target")
+done
 
 for cmd in docker devcontainer; do
   command -v "$cmd" >/dev/null 2>&1 || die "$cmd is required"
@@ -263,7 +588,6 @@ done
 
 docker info >/dev/null 2>&1 || die 'cannot connect to Docker; check the daemon and permissions'
 
-workspace="$(pwd -P)"
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/dcs.XXXXXXXX")" || die 'unable to create temporary directory'
 readonly tmp
 session="$(cat /proc/sys/kernel/random/uuid)" || die 'unable to generate a session ID'
@@ -293,19 +617,56 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-# Emit a JSON string. Values are image and Feature references, so escaping \\
-# and " is enough; shell data is never interpolated unescaped.
+# Emit a JSON string. Image and Feature references only need \\ and " escaped,
+# but --env NAME=VALUE values may contain control characters, so escape those
+# as well.
 json_string() {
-  local value="$1"
-  value="${value//\\/\\\\}"
-  value="${value//\"/\\\"}"
-  printf '"%s"' "$value"
+  local value="$1" out='' char code i
+  for ((i = 0; i < ${#value}; i++)); do
+    char="${value:i:1}"
+    case "$char" in
+      '\') out+='\\' ;;
+      '"') out+='\"' ;;
+      $'\n') out+='\n' ;;
+      $'\r') out+='\r' ;;
+      $'\t') out+='\t' ;;
+      $'\b') out+='\b' ;;
+      $'\f') out+='\f' ;;
+      *)
+        printf -v code '%d' "'$char"
+        if ((code < 32)); then
+          printf -v char '\\u%04x' "$code"
+        fi
+        out+="$char"
+        ;;
+    esac
+  done
+  printf '"%s"' "$out"
 }
 
 {
   printf '{\n'
   printf '  "name": "dcs sandbox",\n'
   printf '  "image": %s,\n' "$(json_string "$image")"
+  if ((${#remote_env_order[@]})); then
+    printf '  "remoteEnv": {'
+    separator=''
+    for name in "${remote_env_order[@]}"; do
+      printf '%s%s: %s' "$separator" "$(json_string "$name")" "$(json_string "${remote_env[$name]}")"
+      separator=', '
+    done
+    printf '},\n'
+  fi
+  if ((${#mount_sources[@]})); then
+    printf '  "mounts": ['
+    separator=''
+    for ((i = 0; i < ${#mount_sources[@]}; i++)); do
+      printf '%s{"type": "bind", "source": %s, "target": %s}' \
+        "$separator" "$(json_string "${mount_sources[i]}")" "$(json_string "${mount_targets[i]}")"
+      separator=', '
+    done
+    printf '],\n'
+  fi
   printf '  "features": {'
   separator=''
   if ((${#all_features[@]})); then
@@ -324,11 +685,28 @@ printf 'dcs: creating a disposable container for %s\n' "$workspace" >&2
 
 # Use an explicit external config to ignore any existing workspace .devcontainer.
 # --id-label guarantees concurrent runs never share/reuse the same container.
-devcontainer up \
-  --workspace-folder "$workspace" \
-  --config "$tmp/devcontainer.json" \
-  --id-label "dcs.session=$session" \
-  --no-lockfile || die 'devcontainer up failed'
+# remoteEnv may contain literal --env values, so keep it out of the container
+# metadata label when it is present.
+up_args=(
+  --workspace-folder "$workspace"
+  --config "$tmp/devcontainer.json"
+  --id-label "dcs.session=$session"
+  --no-lockfile
+)
+if ((${#remote_env_order[@]})); then
+  up_args+=(--omit-config-remote-env-from-metadata)
+fi
+# devcontainer up writes its JSON result to stdout. Capture it so it does not
+# pollute the wrapped command's output, and replay it on stderr if startup
+# fails (keeping the CLI's exit status).
+up_output="$(devcontainer up "${up_args[@]}")" || {
+  up_status=$?
+  if [[ -n "$up_output" ]]; then
+    printf '%s\n' "$up_output" >&2
+  fi
+  printf 'dcs: devcontainer up failed\n' >&2
+  exit "$up_status"
+}
 
 # Do not replace this shell: the EXIT trap must remove the container.
 # exec looks the container up from the same dcs.session label.
