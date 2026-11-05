@@ -42,6 +42,7 @@ From the project directory you want to edit:
 
 ```sh
 dcs opencode                  # opencode
+dcs pi                        # Pi Coding Agent
 dcs opencode,tmux,vim         # with tmux and Vim
 dcs python,node               # Python image + Node Feature
 dcs python,node bash          # both languages, in a shell
@@ -179,7 +180,7 @@ command runs (`bash` if none does).
 | `cpp` | — | — |
 
 The remaining components are Feature-only (default command in parentheses):
-`opencode` (`opencode`), `codex` (`codex --no-daemon`), `claude` (`claude`),
+`opencode` (`opencode`), `pi` (`pi`), `codex` (`codex --no-daemon`), `claude` (`claude`),
 `tmux` (`tmux`), `vim` (`vim`), `playwright`, `gitlab-cli`, `github-cli`,
 `kubectl`, `helmfile`, `git-config`.
 
