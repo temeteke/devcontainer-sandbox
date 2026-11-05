@@ -2,11 +2,13 @@
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import unittest
 
 DCS = Path(__file__).resolve().parents[1] / "bin" / "dcs"
+GIT = shutil.which("git")
 IMAGE_PREFIX = "mcr.microsoft.com/devcontainers/"
 FEATURE_PREFIX = "ghcr.io/temeteke/devcontainer-features/"
 DEV_FEATURES = "ghcr.io/devcontainers/features/"
@@ -22,9 +24,11 @@ if argv[0] == 'up':
     pathlib.Path(os.environ['TEST_CONFIG_JSON']).write_text(pathlib.Path(config).read_text())
     if os.environ.get('MOCK_UP_FAIL') == '1':
         print('mock build failed', file=sys.stderr)
+        print(json.dumps({'outcome': 'error', 'message': 'mock build failed'}))
         sys.exit(9)
     print(json.dumps({'outcome':'success','containerId':'test-container'}))
 elif argv[0] == 'exec':
+    print('exec-ok')
     sys.exit(int(os.environ.get('MOCK_EXEC_EXIT', '0')))
 else:
     sys.exit(11)
@@ -68,10 +72,12 @@ class TestDcs(unittest.TestCase):
         self.env = {**os.environ, "HOME": str(self.home),
                     "PATH": str(mocks) + os.pathsep + os.environ["PATH"],
                     "TEST_LOG": str(self.log),
-                    "TEST_CONFIG_JSON": str(self.config)}
+                    "TEST_CONFIG_JSON": str(self.config),
+                    # Do not discover a repository above the temporary tree.
+                    "GIT_CEILING_DIRECTORIES": str(root)}
 
-    def run_dcs(self, *args, **extra_env):
-        return subprocess.run([str(DCS), *args], cwd=self.workspace,
+    def run_dcs(self, *args, cwd=None, **extra_env):
+        return subprocess.run([str(DCS), *args], cwd=cwd or self.workspace,
                               env={**self.env, **extra_env},
                               capture_output=True, text=True)
 
@@ -83,6 +89,13 @@ class TestDcs(unittest.TestCase):
         up = next(c for c in calls if c[:2] == ["devcontainer", "up"])
         exec_ = next(c for c in calls if c[:2] == ["devcontainer", "exec"])
         return calls, up, exec_
+
+    def generated_mounts(self):
+        return json.loads(self.config.read_text()).get("mounts", [])
+
+    def assert_no_up(self):
+        calls = self.calls() if self.log.exists() else []
+        self.assertFalse(any(c[:2] == ["devcontainer", "up"] for c in calls))
 
     def test_component_defaults_and_workspace(self):
         components = {
@@ -114,7 +127,10 @@ class TestDcs(unittest.TestCase):
             "tmux": (BASE_IMAGE, {FEATURE_PREFIX + "tmux:0"}, "tmux"),
             "vim": (BASE_IMAGE, {FEATURE_PREFIX + "vim:0"}, "vim"),
             "gitlab-cli": (BASE_IMAGE, {FEATURE_PREFIX + "gitlab-cli:0"}, "bash"),
-            "github-cli": (BASE_IMAGE, {DEV_FEATURES + "github-cli:1"}, "bash"),
+            "github-cli": (BASE_IMAGE, {FEATURE_PREFIX + "github-cli:0"}, "bash"),
+            "kubectl": (BASE_IMAGE, {FEATURE_PREFIX + "kubectl:0"}, "bash"),
+            "helmfile": (BASE_IMAGE, {FEATURE_PREFIX + "helmfile:0"}, "bash"),
+            "git-config": (BASE_IMAGE, {FEATURE_PREFIX + "git-config:0"}, "bash"),
         }
         for component, (image, features, command) in components.items():
             with self.subTest(component=component):
@@ -144,6 +160,435 @@ class TestDcs(unittest.TestCase):
         config = json.loads(self.config.read_text())
         self.assertEqual(config["image"], BASE_IMAGE)
         self.assertEqual(config["features"], {})
+
+    def test_stdout_contains_only_the_command_output(self):
+        result = self.run_dcs("python")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        # devcontainer up's JSON must not leak into the wrapped command's stdout.
+        self.assertEqual(result.stdout, "exec-ok\n")
+
+    def test_env_forwards_host_variable(self):
+        result = self.run_dcs("--env", "DCS_TEST_TOKEN", "opencode",
+                              DCS_TEST_TOKEN="s3cret")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        config = json.loads(self.config.read_text())
+        self.assertEqual(config["remoteEnv"],
+                         {"DCS_TEST_TOKEN": "${localEnv:DCS_TEST_TOKEN}"})
+        _, up, _ = self.up_and_exec()
+        self.assertIn("--omit-config-remote-env-from-metadata", up)
+
+    def test_env_short_option_and_literal(self):
+        result = self.run_dcs("-e", "DCS_TEST_TOKEN=s3cret", "opencode")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        config = json.loads(self.config.read_text())
+        self.assertEqual(config["remoteEnv"], {"DCS_TEST_TOKEN": "s3cret"})
+        _, up, _ = self.up_and_exec()
+        self.assertIn("--omit-config-remote-env-from-metadata", up)
+
+    def test_env_long_equals_form(self):
+        result = self.run_dcs("--env=DCS_TEST_TOKEN=s3cret", "opencode")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        config = json.loads(self.config.read_text())
+        self.assertEqual(config["remoteEnv"], {"DCS_TEST_TOKEN": "s3cret"})
+
+    def test_env_long_equals_host_form(self):
+        result = self.run_dcs("--env=DCS_TEST_TOKEN", "opencode",
+                              DCS_TEST_TOKEN="s3cret")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        config = json.loads(self.config.read_text())
+        self.assertEqual(config["remoteEnv"],
+                         {"DCS_TEST_TOKEN": "${localEnv:DCS_TEST_TOKEN}"})
+
+    def test_long_equals_forms(self):
+        feature = DEV_FEATURES + "go:1"
+        result = self.run_dcs("--image=example.com/custom:1",
+                              "--feature=" + feature, "--env=FOO=bar",
+                              "base", "bash")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        config = json.loads(self.config.read_text())
+        self.assertEqual(config["image"], "example.com/custom:1")
+        self.assertEqual(config["features"], {feature: {}})
+        self.assertEqual(config["remoteEnv"], {"FOO": "bar"})
+
+    def test_env_multiple_values_and_last_wins(self):
+        result = self.run_dcs("-e", "FOO=one", "--env", "BAR=two",
+                              "--env", "FOO=three", "opencode")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        config = json.loads(self.config.read_text())
+        self.assertEqual(config["remoteEnv"], {"FOO": "three", "BAR": "two"})
+
+    def test_env_allows_empty_literal_and_empty_host_value(self):
+        result = self.run_dcs("--env", "FOO=", "opencode")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        config = json.loads(self.config.read_text())
+        self.assertEqual(config["remoteEnv"], {"FOO": ""})
+
+        self.log.write_text("")
+        result = self.run_dcs("--env", "DCS_TEST_EMPTY", "opencode",
+                              DCS_TEST_EMPTY="")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        config = json.loads(self.config.read_text())
+        self.assertEqual(config["remoteEnv"],
+                         {"DCS_TEST_EMPTY": "${localEnv:DCS_TEST_EMPTY}"})
+
+    def test_env_literal_is_json_escaped(self):
+        value = 'a"b\\c=d\ne\tf\x01g😀é'
+        result = self.run_dcs("--env", "FOO=" + value, "opencode")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        config = json.loads(self.config.read_text())
+        self.assertEqual(config["remoteEnv"]["FOO"], value)
+
+    def test_env_rejects_unset_host_variable(self):
+        result = self.run_dcs("--env", "DCS_TEST_UNSET_9F3C", "opencode")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("DCS_TEST_UNSET_9F3C", result.stderr)
+        self.assertIn("not set", result.stderr)
+        calls = self.calls() if self.log.exists() else []
+        self.assertFalse(any(c[:2] == ["devcontainer", "up"] for c in calls))
+
+    def test_env_rejects_invalid_names(self):
+        for spec in ("1FOO", "=value", "FOO-BAR"):
+            with self.subTest(spec=spec):
+                self.log.write_text("")
+                result = self.run_dcs("--env", spec, "opencode")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("invalid environment variable name", result.stderr)
+                self.assertFalse(any(c[:2] == ["devcontainer", "up"]
+                                     for c in self.calls()))
+
+    def test_env_requires_a_value(self):
+        for args in (("--env",), ("-e",)):
+            with self.subTest(args=args):
+                self.log.write_text("")
+                result = self.run_dcs(*args)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("missing value for", result.stderr)
+                self.assertFalse(any(c[:2] == ["devcontainer", "up"]
+                                     for c in self.calls()))
+
+    def test_long_equals_rejects_empty_values(self):
+        for option in ("--image=", "--feature=", "--env=", "--mount-dir="):
+            with self.subTest(option=option):
+                self.log.write_text("")
+                result = self.run_dcs(option)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("missing value for", result.stderr)
+                self.assertFalse(any(c[:2] == ["devcontainer", "up"]
+                                     for c in self.calls()))
+
+    def test_no_env_leaves_remote_env_absent(self):
+        result = self.run_dcs("opencode")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        config = json.loads(self.config.read_text())
+        self.assertNotIn("remoteEnv", config)
+        _, up, _ = self.up_and_exec()
+        self.assertNotIn("--omit-config-remote-env-from-metadata", up)
+
+    def test_env_without_components_starts_base_shell(self):
+        result = self.run_dcs("--env", "FOO=bar")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        config = json.loads(self.config.read_text())
+        self.assertEqual(config["image"], BASE_IMAGE)
+        self.assertEqual(config["remoteEnv"], {"FOO": "bar"})
+        _, _, exec_ = self.up_and_exec()
+        self.assertEqual(exec_[exec_.index("--") + 1], "bash")
+
+    def test_mount_dir_default_target(self):
+        shared = Path(self.temp.name) / "shared-lib"
+        shared.mkdir()
+        result = self.run_dcs("--mount-dir", "../shared-lib", "python")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.generated_mounts(), [{
+            "type": "bind",
+            "source": str(shared.resolve()),
+            "target": "/workspaces/shared-lib",
+        }])
+        calls, _, exec_ = self.up_and_exec()
+        self.assertEqual(exec_[exec_.index("--") + 1], "python")
+        self.assertEqual(calls[-1][:3], ["docker", "rm", "-f"])
+
+    def test_mount_dir_explicit_target_and_equals_form(self):
+        shared = Path(self.temp.name) / "shared-lib"
+        shared.mkdir()
+        result = self.run_dcs("--mount-dir", "../shared-lib:lib-a", "python")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.generated_mounts()[0]["target"],
+                         "/workspaces/lib-a")
+
+        self.log.write_text("")
+        result = self.run_dcs("--mount-dir=../shared-lib:lib-b", "python")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.generated_mounts()[0]["target"],
+                         "/workspaces/lib-b")
+
+    def test_mount_dir_multiple_and_order(self):
+        root = Path(self.temp.name)
+        for name in ("shared-lib", "api"):
+            (root / name).mkdir()
+        result = self.run_dcs("--mount-dir", "../shared-lib",
+                              "--mount-dir=../api:api2", "python")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            [(m["source"], m["target"]) for m in self.generated_mounts()],
+            [(str((root / "shared-lib").resolve()), "/workspaces/shared-lib"),
+             (str((root / "api").resolve()), "/workspaces/api2")])
+
+    def test_mount_dir_same_basename_with_explicit_targets(self):
+        root = Path(self.temp.name)
+        (root / "a" / "lib").mkdir(parents=True)
+        (root / "b" / "lib").mkdir(parents=True)
+        result = self.run_dcs("--mount-dir", "../a/lib:lib-a",
+                              "--mount-dir", "../b/lib:lib-b", "python")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([m["target"] for m in self.generated_mounts()],
+                         ["/workspaces/lib-a", "/workspaces/lib-b"])
+
+    def test_mount_dir_expands_tilde_and_resolves_symlinks(self):
+        real = self.home / "real-repo"
+        real.mkdir()
+        (self.home / "alias-repo").symlink_to(real)
+        result = self.run_dcs("--mount-dir", "~/alias-repo", "python")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.generated_mounts(), [{
+            "type": "bind",
+            "source": str(real.resolve()),
+            "target": "/workspaces/real-repo",
+        }])
+
+    def test_mount_dir_source_with_colon_needs_explicit_target(self):
+        colon = Path(self.temp.name) / "a:b"
+        colon.mkdir()
+        result = self.run_dcs("--mount-dir", "../a:b:lib-ab", "python")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.generated_mounts(), [{
+            "type": "bind",
+            "source": str(colon.resolve()),
+            "target": "/workspaces/lib-ab",
+        }])
+
+    def test_mount_dir_rejects_variable_substitution(self):
+        root = Path(self.temp.name)
+        literal = root / "${localWorkspaceFolderBasename}"
+        literal.mkdir()
+        (root / "${localEnv:OLDPWD}").mkdir()
+        (root / "shared-lib").mkdir()
+        (root / "alias").symlink_to(literal)
+        cases = [
+            ("../${localWorkspaceFolderBasename}", "mount source"),
+            ("../${localEnv:OLDPWD}:x", "mount source"),
+            ("../shared-lib:${localWorkspaceFolderBasename}", "mount target"),
+            ("../alias", "mount source"),
+        ]
+        for spec, message in cases:
+            with self.subTest(spec=spec):
+                if self.log.exists():
+                    self.log.write_text("")
+                result = self.run_dcs("--mount-dir", spec, "python")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("${...}", result.stderr)
+                self.assertIn(message, result.stderr)
+                self.assert_no_up()
+
+    def test_mount_dir_rejects_leading_or_trailing_whitespace(self):
+        root = Path(self.temp.name)
+        (root / "shared-lib").mkdir()
+        (root / "space ").mkdir()
+        (root / " space").mkdir()
+        (root / "tab\tname").mkdir()
+        cases = [
+            ("../space ",
+             "mount source must not start or end with whitespace"),
+            ("../ space",
+             "mount target must not start or end with whitespace"),
+            ("../tab\tname",
+             "mount source must not contain control characters"),
+            ("../shared-lib:lib ",
+             "mount target must not start or end with whitespace"),
+            ("../shared-lib: lib",
+             "mount target must not start or end with whitespace"),
+            ("../shared-lib:lib\tx",
+             "mount target must not contain control characters"),
+        ]
+        for spec, message in cases:
+            with self.subTest(spec=spec):
+                if self.log.exists():
+                    self.log.write_text("")
+                result = self.run_dcs("--mount-dir", spec, "python")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
+                self.assert_no_up()
+
+    def test_mount_dir_allows_internal_spaces(self):
+        shared = Path(self.temp.name) / "shared lib"
+        shared.mkdir()
+        result = self.run_dcs("--mount-dir", "../shared lib", "python")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.generated_mounts(), [{
+            "type": "bind",
+            "source": str(shared.resolve()),
+            "target": "/workspaces/shared lib",
+        }])
+
+    def test_mount_dir_allows_leading_space_in_source_with_explicit_target(self):
+        shared = Path(self.temp.name) / " space"
+        shared.mkdir()
+        result = self.run_dcs("--mount-dir", "../ space:safe", "python")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.generated_mounts(), [{
+            "type": "bind",
+            "source": str(shared.resolve()),
+            "target": "/workspaces/safe",
+        }])
+
+    def test_mount_dir_rejects_ambiguous_colon_source(self):
+        root = Path(self.temp.name)
+        (root / "a").mkdir()
+        (root / "a:b").mkdir()
+        result = self.run_dcs("--mount-dir", "../a:b", "python")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("ambiguous mount", result.stderr)
+        self.assert_no_up()
+
+    @unittest.skipUnless(GIT, "git is required")
+    def test_mount_dir_from_git_subdirectory_uses_sibling_target(self):
+        root = Path(self.temp.name)
+        repo = root / "repo"
+        (repo / "sub").mkdir(parents=True)
+        subprocess.run([GIT, "init", "-q", str(repo)], check=True)
+        shared = root / "other" / "shared"
+        shared.mkdir(parents=True)
+        result = self.run_dcs("--mount-dir", "../../other/shared", "python",
+                              cwd=repo / "sub")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.generated_mounts(), [{
+            "type": "bind",
+            "source": str(shared.resolve()),
+            "target": "/workspaces/shared",
+        }])
+        _, _, exec_ = self.up_and_exec()
+        self.assertEqual(exec_[exec_.index("--") + 1], "python")
+
+    def test_mount_dir_absent_by_default(self):
+        result = self.run_dcs("opencode")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        config = json.loads(self.config.read_text())
+        self.assertNotIn("mounts", config)
+
+    def test_mount_dir_without_components_starts_base_shell(self):
+        (Path(self.temp.name) / "shared-lib").mkdir()
+        result = self.run_dcs("--mount-dir", "../shared-lib")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        config = json.loads(self.config.read_text())
+        self.assertEqual(config["image"], BASE_IMAGE)
+        self.assertEqual(self.generated_mounts()[0]["target"],
+                         "/workspaces/shared-lib")
+        _, _, exec_ = self.up_and_exec()
+        self.assertEqual(exec_[exec_.index("--") + 1], "bash")
+
+    def test_mount_dir_rejects_invalid_sources(self):
+        (Path(self.temp.name) / "file.txt").write_text("x")
+        cases = {
+            "../missing": "does not exist",
+            "../file.txt": "not a directory",
+            "/": "host root",
+            ".": "is the workspace",
+        }
+        for spec, message in cases.items():
+            with self.subTest(spec=spec):
+                if self.log.exists():
+                    self.log.write_text("")
+                result = self.run_dcs("--mount-dir", spec, "python")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
+                self.assert_no_up()
+
+    def test_mount_dir_rejects_invalid_targets(self):
+        (Path(self.temp.name) / "shared-lib").mkdir()
+        cases = {
+            "../shared-lib:/workspaces/lib": "must be relative",
+            "../shared-lib:deps/lib": "single name",
+            "../shared-lib:.": "invalid mount target",
+            "../shared-lib:..": "invalid mount target",
+            "../shared-lib:": "missing mount target",
+            "../shared-lib:lib,a": "must not contain",
+        }
+        for spec, message in cases.items():
+            with self.subTest(spec=spec):
+                if self.log.exists():
+                    self.log.write_text("")
+                result = self.run_dcs("--mount-dir", spec, "python")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
+                self.assert_no_up()
+
+    def test_mount_dir_rejects_comma_or_quote_in_source(self):
+        root = Path(self.temp.name)
+        for name in ("a,b", 'a"b'):
+            (root / name).mkdir()
+        for name in ("a,b", 'a"b'):
+            with self.subTest(name=name):
+                if self.log.exists():
+                    self.log.write_text("")
+                result = self.run_dcs("--mount-dir", "../" + name, "python")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("must not contain", result.stderr)
+                self.assert_no_up()
+
+    def test_mount_dir_rejects_duplicate_target(self):
+        root = Path(self.temp.name)
+        (root / "a" / "lib").mkdir(parents=True)
+        (root / "b" / "lib").mkdir(parents=True)
+        result = self.run_dcs("--mount-dir", "../a/lib:shared",
+                              "--mount-dir", "../b/lib:shared", "python")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("already used", result.stderr)
+        self.assert_no_up()
+
+    def test_mount_dir_rejects_workspace_target(self):
+        other = Path(self.temp.name) / "other" / "workspace"
+        other.mkdir(parents=True)
+        for spec in ("../other/workspace",
+                     "../other/workspace:workspace"):
+            with self.subTest(spec=spec):
+                if self.log.exists():
+                    self.log.write_text("")
+                result = self.run_dcs("--mount-dir", spec, "python")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("already used by the workspace", result.stderr)
+                self.assert_no_up()
+
+    @unittest.skipUnless(GIT, "git is required")
+    def test_mount_dir_rejects_git_root_workspace_target(self):
+        root = Path(self.temp.name)
+        repo = root / "repo"
+        (repo / "sub").mkdir(parents=True)
+        subprocess.run([GIT, "init", "-q", str(repo)], check=True)
+        (root / "other" / "repo").mkdir(parents=True)
+        result = self.run_dcs("--mount-dir", "../../other/repo", "python",
+                              cwd=repo / "sub")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("already used by the workspace", result.stderr)
+        self.assert_no_up()
+
+    def test_mount_dir_rejects_empty_value(self):
+        for args in (("--mount-dir",), ("--mount-dir=",)):
+            with self.subTest(args=args):
+                if self.log.exists():
+                    self.log.write_text("")
+                result = self.run_dcs(*args)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("missing value for --mount-dir", result.stderr)
+                self.assert_no_up()
+
+    def test_docker_mount_options_are_rejected(self):
+        for option in ("--mount", "--volume", "-v"):
+            with self.subTest(option=option):
+                if self.log.exists():
+                    self.log.write_text("")
+                result = self.run_dcs(option, "../shared-lib", "python")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("--mount-dir", result.stderr)
+                self.assert_no_up()
 
     def test_combined_components(self):
         result = self.run_dcs("opencode,python")
@@ -298,6 +743,28 @@ class TestDcs(unittest.TestCase):
         _, _, exec_ = self.up_and_exec()
         self.assertEqual(exec_[exec_.index("--") + 1:], ["bash"])
 
+    def test_command_requires_a_component(self):
+        cases = (("--",), ("--", "bash"),
+                 ("--image", "example.com/custom:1", "--", "bash"))
+        for args in cases:
+            with self.subTest(args=args):
+                self.log.write_text("")
+                result = self.run_dcs(*args)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("missing component list before --", result.stderr)
+                self.assertNotIn("dcs base COMMAND", result.stderr)
+                self.assertFalse(any(c[:2] == ["devcontainer", "up"]
+                                     for c in self.calls()))
+
+    def test_base_component_runs_explicit_command(self):
+        result = self.run_dcs("base", "bash")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        config = json.loads(self.config.read_text())
+        self.assertEqual(config["image"], BASE_IMAGE)
+        self.assertEqual(config["features"], {})
+        _, _, exec_ = self.up_and_exec()
+        self.assertEqual(exec_[exec_.index("--") + 1:], ["bash"])
+
     def test_image_and_extra_features_and_command(self):
         result = self.run_dcs("--image", "python:3.12",
                               "--feature", "ghcr.io/devcontainers/features/go:1",
@@ -341,7 +808,9 @@ class TestDcs(unittest.TestCase):
 
     def test_up_failure_still_cleans_up(self):
         r = self.run_dcs("codex", MOCK_UP_FAIL="1")
-        self.assertNotEqual(r.returncode, 0)
+        self.assertEqual(r.returncode, 9)
+        self.assertEqual(r.stdout, "")
+        self.assertIn('"outcome": "error"', r.stderr)
         self.assertFalse(any(c[:2] == ["devcontainer", "exec"] for c in self.calls()))
         self.assertTrue(any(c[:3] == ["docker", "rm", "-f"] for c in self.calls()))
 
@@ -361,6 +830,30 @@ class TestDcs(unittest.TestCase):
         calls = self.calls() if self.log.exists() else []
         self.assertFalse(any(c[:2] == ["devcontainer", "up"] for c in calls))
 
+    def test_component_that_adds_nothing_is_rejected(self):
+        for args in (("python,cpp",),
+                     ("--image", "example.com/custom:1", "cpp")):
+            with self.subTest(args=args):
+                self.log.write_text("")
+                result = self.run_dcs(*args)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("component 'cpp' adds nothing", result.stderr)
+                self.assertFalse(any(c[:2] == ["devcontainer", "up"]
+                                     for c in self.calls()))
+
+    def test_image_only_component_can_be_first(self):
+        result = self.run_dcs("cpp,python")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        config = json.loads(self.config.read_text())
+        self.assertEqual(config["image"], IMAGE_PREFIX + "cpp:latest")
+        self.assertEqual(set(config["features"]), {DEV_FEATURES + "python:1"})
+
+    def test_base_is_exempt_from_the_no_op_check(self):
+        result = self.run_dcs("python,base")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        config = json.loads(self.config.read_text())
+        self.assertEqual(config["image"], IMAGE_PREFIX + "python:latest")
+
     def test_empty_component_name_is_rejected(self):
         r = self.run_dcs(",opencode")
         self.assertNotEqual(r.returncode, 0)
@@ -375,23 +868,156 @@ class TestDcs(unittest.TestCase):
         calls = self.calls() if self.log.exists() else []
         self.assertFalse(any(c[:1] == ["devcontainer"] for c in calls))
 
-    def test_options_after_components_go_to_default_command(self):
+    def test_component_command_is_an_argv(self):
+        result = self.run_dcs("codex")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        _, _, exec_ = self.up_and_exec()
+        self.assertEqual(exec_[exec_.index("--") + 1:], ["codex", "--no-daemon"])
+
+        # An explicit command replaces the whole default argv.
+        self.log.write_text("")
+        result = self.run_dcs("codex", "codex", "--help")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        _, _, exec_ = self.up_and_exec()
+        self.assertEqual(exec_[exec_.index("--") + 1:], ["codex", "--help"])
+
+    def test_command_after_components_replaces_the_default(self):
+        # Naming the command runs it, with the following arguments untouched.
+        result = self.run_dcs("opencode", "opencode", "--help")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        _, _, exec_ = self.up_and_exec()
+        self.assertEqual(exec_[exec_.index("--") + 1:], ["opencode", "--help"])
+
+        # Everything after the component list is the command, even when it
+        # starts with a dash.
+        self.log.write_text("")
         result = self.run_dcs("opencode", "--help", "--version")
         self.assertEqual(result.returncode, 0, result.stderr)
         _, _, exec_ = self.up_and_exec()
-        self.assertEqual(exec_[exec_.index("--") + 1:],
-                         ["opencode", "--help", "--version"])
+        self.assertEqual(exec_[exec_.index("--") + 1:], ["--help", "--version"])
 
     def test_help_lists_components_and_rejects_invalid_option(self):
         help_ = self.run_dcs("--help")
         self.assertEqual(help_.returncode, 0)
+        self.assertEqual(help_.stderr, "")
+        self.assertIn("-e, --env NAME[=VALUE]", help_.stdout)
+        self.assertIn("--mount-dir DIR[:TARGET]", help_.stdout)
+        self.assertIn("${...}", help_.stdout)
+        self.assertIn("no read-only mode", help_.stdout)
+        self.assertIn("--volume", help_.stdout)
+        self.assertIn("--option=VALUE", help_.stdout)
         for component in ("python", "python:3.12", "node", "node:22",
                           "go:1.26", "rust:1.87", "opencode", "pi", "codex",
-                          "claude", "tmux", "vim", "base"):
+                          "claude", "tmux", "vim", "github-cli", "gitlab-cli",
+                          "kubectl", "helmfile", "git-config", "base"):
             self.assertIn(component, help_.stdout)
         r = self.run_dcs("--bad")
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("unknown option", r.stderr)
+
+    def complete(self, cword, *words, **extra_env):
+        result = self.run_dcs("--complete", str(cword), *words, **extra_env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        fields = result.stdout.split("\0")
+        if fields and fields[-1] == "":
+            fields.pop()
+        candidates = fields[0::2]
+        flags = fields[1::2]
+        self.assertEqual(len(candidates), len(flags))
+        self.assertEqual(len(fields) % 2, 0)
+        return candidates, flags
+
+    def test_completion_script_is_valid_bash(self):
+        result = self.run_dcs("--completion", "bash")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("_dcs()", result.stdout)
+        self.assertIn("complete -o bashdefault -o default -F _dcs dcs",
+                      result.stdout)
+        checked = subprocess.run(["bash", "-n"], input=result.stdout,
+                                 capture_output=True, text=True)
+        self.assertEqual(checked.returncode, 0, checked.stderr)
+        self.assertFalse(self.log.exists())
+
+    def test_completion_rejects_unknown_shell(self):
+        r = self.run_dcs("--completion", "zsh")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("only bash is supported", r.stderr)
+        r = self.run_dcs("--completion")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("usage: dcs --completion bash", r.stderr)
+        self.assertFalse(self.log.exists())
+
+    def test_completion_offers_options_and_components(self):
+        candidates, flags = self.complete(1, "dcs", "")
+        for candidate in ("--image", "--feature", "--env", "--mount-dir",
+                          "-e", "-h", "--help", "base", "python",
+                          "python:3.12", "opencode"):
+            self.assertIn(candidate, candidates)
+        for candidate, expected in (("--image", "space"),
+                                    ("base", "nospace")):
+            self.assertEqual(flags[candidates.index(candidate)], expected)
+        self.assertNotIn("nope", candidates)
+
+    def test_completion_filters_options(self):
+        candidates, _ = self.complete(1, "dcs", "--mo")
+        self.assertEqual(candidates, ["--mount-dir"])
+        candidates, _ = self.complete(1, "dcs", "--e")
+        self.assertEqual(candidates, ["--env"])
+        candidates, _ = self.complete(1, "dcs", "--")
+        self.assertIn("--image", candidates)
+        self.assertNotIn("-e", candidates)
+
+    def test_completion_continues_a_comma_list(self):
+        candidates, flags = self.complete(1, "dcs", "python,no")
+        self.assertIn("python,node", candidates)
+        self.assertIn("python,node:22", candidates)
+        self.assertNotIn("python,python", candidates)
+        self.assertNotIn("node", candidates)
+        self.assertEqual(flags, ["nospace"] * len(candidates))
+
+        candidates, _ = self.complete(1, "dcs", "python,")
+        self.assertIn("python,node", candidates)
+        self.assertNotIn("python,python", candidates)
+        self.assertIn("python,python:3.12", candidates)
+
+        candidates, _ = self.complete(1, "dcs", "python,node,")
+        self.assertNotIn("python,node,python", candidates)
+        self.assertNotIn("python,node,node", candidates)
+        self.assertIn("python,node,opencode", candidates)
+
+    def test_completion_stops_at_the_container_command(self):
+        self.assertEqual(self.complete(2, "dcs", "python", ""), ([], []))
+        self.assertEqual(self.complete(2, "dcs", "python", "--"), ([], []))
+        candidates, _ = self.complete(3, "dcs", "--image", "example:1", "")
+        self.assertIn("python", candidates)
+        candidates, _ = self.complete(3, "dcs", "--env", "FOO=bar", "")
+        self.assertIn("python", candidates)
+
+    def test_completion_offers_directories_for_mount_dir(self):
+        (self.workspace / "shared-lib").mkdir()
+        (self.workspace / "shared lib").mkdir()
+        candidates, flags = self.complete(2, "dcs", "--mount-dir", "sh")
+        self.assertCountEqual(candidates, ["shared-lib/", "shared lib/"])
+        self.assertEqual(flags, ["nospace", "nospace"])
+        candidates, _ = self.complete(1, "dcs", "--mount-dir=sh")
+        self.assertCountEqual(candidates, ["--mount-dir=shared-lib/",
+                                           "--mount-dir=shared lib/"])
+        self.assertFalse(self.log.exists())
+
+    def test_completion_offers_exported_environment_names(self):
+        extra = {"DCS_COMPLETION_9F3C": "1"}
+        candidates, flags = self.complete(2, "dcs", "--env",
+                                          "DCS_COMPLETION_9F3C",
+                                          **extra)
+        self.assertEqual(candidates, ["DCS_COMPLETION_9F3C"])
+        self.assertEqual(flags, ["space"])
+        candidates, _ = self.complete(1, "dcs", "--env=DCS_COMPLETION_9F3C",
+                                      **extra)
+        self.assertEqual(candidates, ["--env=DCS_COMPLETION_9F3C"])
+        candidates, _ = self.complete(2, "dcs", "--env",
+                                     "DCS_COMPLETION_9F3C=1", **extra)
+        self.assertEqual(candidates, [])
+        self.assertFalse(self.log.exists())
 
 
 if __name__ == "__main__":
