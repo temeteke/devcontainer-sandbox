@@ -42,6 +42,7 @@ From the project directory you want to edit:
 
 ```sh
 dcs opencode                  # opencode
+dcs dsh dsh --help            # DeepSeek Harness CLI help
 dcs opencode,tmux,vim         # with tmux and Vim
 dcs python,node               # Python image + Node Feature
 dcs python,node bash          # both languages, in a shell
@@ -157,6 +158,15 @@ add another `:TARGET`. Docker's `-v`, `--volume`, and `--mount` syntax is not
 supported; use this option's `DIR[:TARGET]` form. Each mount widens the
 sandbox; mount only the directories you need.
 
+DeepSeek Harness is a profile-based launcher, not a built-in terminal chat.
+For headless use, specify the command explicitly:
+
+```sh
+dcs dsh dsh --profile headless "Summarize this repository"
+```
+
+The Web UI requires additional port forwarding; `dcs` does not publish ports automatically.
+
 ## Components
 
 `base` provides the plain `mcr.microsoft.com/devcontainers/base:ubuntu24.04`
@@ -179,7 +189,7 @@ command runs (`bash` if none does).
 | `cpp` | — | — |
 
 The remaining components are Feature-only (default command in parentheses):
-`opencode` (`opencode`), `codex` (`codex --no-daemon`), `claude` (`claude`),
+`opencode` (`opencode`), `dsh` (`dsh`), `codex` (`codex --no-daemon`), `claude` (`claude`),
 `tmux` (`tmux`), `vim` (`vim`), `playwright`, `gitlab-cli`, `github-cli`,
 `kubectl`, `helmfile`, `git-config`.
 
